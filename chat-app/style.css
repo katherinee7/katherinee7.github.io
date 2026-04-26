@@ -1,0 +1,150 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #e5f1ef;
+  color: #1b1411;
+}
+
+.app-shell {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.panel,
+.chat-view {
+  background: rgb(255, 255, 255);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 8px 15px rgba(1, 92, 89, 0.208);
+  margin-bottom: 20px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+}
+
+input[type="text"] {
+  flex: 1;
+  padding: 12px 14px;
+  border: 1px solid #d0d7e2;
+  border-radius: 10px;
+  font-size: 1rem;
+}
+
+button {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: #528176fc;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.chat-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.chat-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.chat-card h3 {
+  margin: 0 0 4px;
+}
+
+.meta {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #6b7280;
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.broadcast-box {
+  background: #fff7d6;
+  border: 1px solid #f1d36b;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+
+.messages {
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 16px;
+  min-height: 300px;
+  margin-bottom: 16px;
+}
+
+.message-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message-bubble {
+  max-width: 75%;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.message-bubble.mine {
+  align-self: flex-end;
+  background: #e0edff;
+}
+
+.message-meta {
+  margin-bottom: 6px;
+  font-size: 0.9rem;
+}
+
+.message-content {
+  font-size: 1rem;
+}
+
+.delete-btn {
+  margin-top: 8px;
+  background: #dc2626e1;
+}
+
+.message-form {
+  display: flex;
+  gap: 12px;
+}

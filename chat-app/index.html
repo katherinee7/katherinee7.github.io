@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Group Project Chat</title>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "vue": "https://cdn.jsdelivr.net/npm/vue@3.5.32/dist/vue.esm-browser.js",
+          "@graffiti-garden/implementation-local": "https://cdn.jsdelivr.net/npm/@graffiti-garden/implementation-local@1.2.0/dist/browser/index.js",
+          "@graffiti-garden/implementation-decentralized": "https://cdn.jsdelivr.net/npm/@graffiti-garden/implementation-decentralized@0.0.9/dist/browser/index.js",
+          "@graffiti-garden/wrapper-vue": "https://cdn.jsdelivr.net/npm/@graffiti-garden/wrapper-vue@1.2.2/dist/browser/plugin.mjs"
+        }
+      }
+    </script>
+
+    <script src="index.js" type="module"></script>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">Loading...</div>
+
+    <template id="template">
+      <div class="app-shell">
+        <header class="topbar">
+          <h1>Group Project Chat</h1>
+
+          <button v-if="!$graffitiSession.value" @click="$graffiti.login()">
+            Log In
+          </button>
+          <button v-else @click="$graffiti.logout($graffitiSession.value)">
+            Log Out
+          </button>
+        </header>
+
+        <template v-if="!selectedChat">
+          <section class="panel">
+            <h2>Create a Chat</h2>
+            <form @submit.prevent="createChat" class="row">
+              <input
+                type="text"
+                v-model="newChatTitle"
+                placeholder="Enter chat title"
+              />
+              <button :disabled="!newChatTitle || isCreatingChat">
+                {{ isCreatingChat ? "Creating..." : "Create Chat" }}
+              </button>
+            </form>
+          </section>
+
+          <section class="panel">
+            <h2>Available Chats</h2>
+            <p v-if="areChatsLoading"><em>Loading chats...</em></p>
+
+            <ul v-else-if="sortedChats.length" class="chat-list">
+              <li v-for="chat of sortedChats" :key="chat.url" class="chat-card">
+                <div>
+                  <h3>{{ chat.value.title }}</h3>
+                  <p class="meta">
+                    Created by
+                    <graffiti-actor-to-handle :actor="chat.actor"></graffiti-actor-to-handle>
+                  </p>
+                </div>
+                <button @click="joinChat(chat)">Open</button>
+              </li>
+            </ul>
+
+            <p v-else>No chats yet. Create the first one.</p>
+          </section>
+        </template>
+
+        <template v-else>
+          <section class="chat-view">
+            <div class="chat-header">
+              <button @click="leaveChat">&larr; Back</button>
+              <h2>{{ selectedChat.value.title }}</h2>
+            </div>
+
+            <div class="broadcast-box">
+              <strong>Live broadcast</strong>
+              <p> Feature coming soon: a shared announcement box for important updates.</p>
+            </div>
+
+            <div class="messages">
+              <p v-if="areMessagesLoading"><em>Loading messages...</em></p>
+
+              <ul v-else class="message-list">
+                <li
+                  v-for="message of sortedMessages"
+                  :key="message.url"
+                  class="message-bubble"
+                  :class="{ mine: message.actor === $graffitiSession.value?.actor }"
+                >
+                  <div class="message-meta">
+                    <strong>
+                      <graffiti-actor-to-handle :actor="message.actor"></graffiti-actor-to-handle>
+                    </strong>
+                  </div>
+
+                  <div class="message-content">
+                    {{ message.value.content }}
+                  </div>
+
+                  <button
+                    v-if="message.actor === $graffitiSession.value?.actor"
+                    @click="deleteMessage(message)"
+                    :disabled="isDeleting.has(message.url)"
+                    class="delete-btn"
+                  >
+                    {{ isDeleting.has(message.url) ? "Deleting..." : "Delete" }}
+                  </button>
+                </li>
+              </ul>
+            </div>
+
+            <form @submit.prevent="sendMessage" class="message-form">
+              <input
+                type="text"
+                v-model="myMessage"
+                placeholder="Type your message"
+              />
+              <button :disabled="!myMessage || isSending">
+                {{ isSending ? "Sending..." : "Send" }}
+              </button>
+            </form>
+          </section>
+        </template>
+      </div>
+    </template>
+  </body>
+</html>

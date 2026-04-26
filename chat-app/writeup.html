@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chat App Writeup</title>
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      max-width: 1000px;
+      margin: 40px auto;
+      line-height: 1.5;
+    }
+    h1 {
+        text-align: center;
+    }
+    h2 {
+        text-decoration: underline;
+    }
+    code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    pre {
+      background: #f3f4f6;
+      padding: 12px;
+      border-radius: 10px;
+      overflow-x: auto;
+    }
+    .section {
+      margin-bottom: 32px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Chat App Writeup</h1>
+
+
+<div class="section">
+  <h2>What / Where / Who</h2>
+
+  <h3>Action 1: Creating a Chat</h3>
+  <p><strong>What:</strong> Creating a new chat room with a custom title and channel.</p>
+
+  <pre>{
+  activity: "Create",
+  type: "Chat",
+  title: "Chat Title",
+  channel: crypto.randomUUID(),
+  published: Date.now()
+}</pre>
+
+  <p><strong>Where:</strong> Chats are stored in a shared directory channel:</p>
+  <p><code>group-project-chat</code></p>
+
+  <p>
+    All users of the app can discover any available chats.
+  </p>
+
+  <p><strong>Who:</strong> Public (everyone with app access)</p>
+
+  <hr>
+
+  <h3>Action 2: Join Chat</h3>
+  <p><strong>What:</strong> Recording that a user has either joined or opened a chat.</p>
+
+  <pre>{
+  activity: "Join",
+  type: "Chat",
+  target: "chat-channel-id",
+  published: Date.now()
+}</pre>
+
+  <p><strong>Where:</strong>  This is stored in a channel unique to each user:</p>
+  <p><code>[actor-id]/chat-app</code></p>
+
+  <p>
+    This allows the app to keep track of which chats a user has joined.
+  </p>
+
+  <p><strong>Who:</strong> Only the user that is currently logged in</p>
+  <p><code>allowed: []</code></p>
+  <hr>
+
+  <h3>Action 3: Send Message</h3>
+  <p><strong>What:</strong> Sending a message inside a chat room.</p>
+
+  <pre>{
+  type: "Message",
+  content: "Hello world",
+  published: Date.now()
+}</pre>
+
+  <p><strong>Where:</strong> This is stored in a unique channel specific to the chat room.
+    This channel is created when the chat is created and it keeps messages separated by chat.
+  </p>
+
+  <p><strong>Who:</strong> Public to anyone who is viewing that chat (no allowed list)</p>
+
+  <hr>
+
+  <h3>Action 4: Broadcast</h3>
+  <p><strong>What:</strong> A pinned announcement message that is shared and editable by all users.</p>
+
+  <pre>{
+  type: "Broadcast",
+  content: "Important announcement",
+  updated: Date.now()
+}</pre>
+
+  <p><strong>Where:</strong> This is stored in the chat’s channel.</p>
+
+  <p><strong>Who:</strong> All users in the chat.</p>
+
+  <p>
+    Note: This feature hasn't been implemented yet, but there is a placeholder in the UI of the planned design.
+  </p>
+</div>
+
+<div class="section">
+  <h2> Other Design Decisions</h2>
+
+    <ul>
+        <li>
+            Separate channels for directory and chat: I used one shared directory channel to store chat creation objects but separate channels
+            for the message sof each chat in order to keep the system organized.
+        </li>
+        <li>
+            The join action is stored privately using an empty allowed list. This allows the app to
+            remember which chats a user has joined without exposing that information to others.
+        </li>
+        <li>
+            I allowed polling in Graffiti discovery so that message updates happen in real time and makes the
+            chat feel more responsive and interactive.
+        </li>
+        <li>
+            I allowed users to delete their own messages to recover from mistakes.
+        </li>
+        <li>
+            I used feedback such as “Sending…” or “Deleting…” to indicate when something is in progress.
+        </li>
+    </ul>
+    </div>
+
+</body>
+</html>
