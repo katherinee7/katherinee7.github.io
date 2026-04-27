@@ -1,4 +1,11 @@
 import { createApp, ref, computed } from "vue";
+import {
+  createRouter,
+  createWebHashHistory,
+  useRoute,
+  useRouter,
+} from "vue-router";
+
 import { GraffitiLocal } from "@graffiti-garden/implementation-local";
 import { GraffitiDecentralized } from "@graffiti-garden/implementation-decentralized";
 import {
@@ -8,22 +15,32 @@ import {
   useGraffitiDiscover,
 } from "@graffiti-garden/wrapper-vue";
 
-function setup() {
-  const graffiti = useGraffiti();
-  const session = useGraffitiSession();
+const directoryChannel = "group-project-chat";
+const DEFAULT_GROUPS = ["General", "Tasks", "Questions", "Announcements"];
 
-  const directoryChannel = "group-project-chat";
+function userChatChannel(session) {
+  return session.value ? `${session.value.actor}/chat-app` : "";
+}
 
-  // App state
-  const selectedChat = ref(null);
+async function postJoinChat(graffiti, session, chatChannel) {
+  if (!session.value) return;
 
-  // Form state
-  const newChatTitle = ref("");
-  const myMessage = ref("");
+  await graffiti.post(
+    {
+      value: {
+        activity: "Join",
+        type: "Chat",
+        target: chatChannel,
+        published: Date.now(),
+      },
+      channels: [userChatChannel(session)],
+      allowed: [],
+    },
+    session.value,
+  );
+}
 
-  // -------------------------
-  // Discover all created chats
-  // -------------------------
+function useChats() {
   const { objects: chatObjects, isFirstPoll: areChatsLoading } =
     useGraffitiDiscover(
       [directoryChannel],
@@ -51,23 +68,658 @@ function setup() {
     });
   });
 
-  // -------------------------
-  // Discover messages for selected chat
-  // -------------------------
-  const activeMessageChannels = computed(() => {
-    return selectedChat.value ? [selectedChat.value.value.channel] : [];
+  return {
+    chatObjects,
+    areChatsLoading,
+    sortedChats,
+  };
+}
+
+function useJoinedChats() {
+  const session = useGraffitiSession();
+
+  const joinedChannels = computed(() => {
+    return session.value ? [userChatChannel(session)] : [];
   });
 
-  const { objects: messageObjects, isFirstPoll: areMessagesLoading } =
+  const { objects: joinObjects, isFirstPoll: areJoinsLoading } =
     useGraffitiDiscover(
+      joinedChannels,
+      {
+        properties: {
+          value: {
+            required: ["activity", "type", "target", "published"],
+            properties: {
+              activity: { const: "Join" },
+              type: { const: "Chat" },
+              target: { type: "string" },
+              published: { type: "number" },
+            },
+          },
+        },
+      },
+      session,
+      true,
+    );
+
+  const joinedChatChannels = computed(() => {
+    return new Set(joinObjects.value.map((join) => join.value.target));
+  });
+
+  function getJoinObjectForChat(chatChannel) {
+    return joinObjects.value.find((join) => join.value.target === chatChannel);
+  }
+
+  return {
+    joinObjects,
+    joinedChatChannels,
+    getJoinObjectForChat,
+    areJoinsLoading,
+  };
+}
+
+const CreateChatForm = {
+  props: ["onCreated"],
+
+  template: `
+    <form @submit.prevent="createChat" class="inline-create-form">
+      <input
+        type="text"
+        v-model="newChatTitle"
+        placeholder="New chat name"
+      />
+
+      <button :disabled="!newChatTitle.trim() || isCreatingChat">
+        {{ isCreatingChat ? "Creating..." : "Create" }}
+      </button>
+
+      <button type="button" class="secondary-btn" @click="$emit('cancel')">
+        Cancel
+      </button>
+    </form>
+
+    <p v-if="!session" class="help-text">
+      Log in before creating a chat.
+    </p>
+  `,
+
+  emits: ["cancel"],
+
+  setup(props) {
+    const graffiti = useGraffiti();
+    const session = useGraffitiSession();
+    const router = useRouter();
+
+    const newChatTitle = ref("");
+    const isCreatingChat = ref(false);
+
+    async function createChat() {
+      if (!newChatTitle.value.trim() || !session.value) return;
+
+      isCreatingChat.value = true;
+
+      try {
+        const chatChannel = crypto.randomUUID();
+
+        await graffiti.post(
+          {
+            value: {
+              activity: "Create",
+              type: "Chat",
+              title: newChatTitle.value.trim(),
+              channel: chatChannel,
+              published: Date.now(),
+            },
+            channels: [directoryChannel],
+          },
+          session.value,
+        );
+
+        await postJoinChat(graffiti, session, chatChannel);
+
+        newChatTitle.value = "";
+
+        if (props.onCreated) {
+          props.onCreated();
+        }
+
+        router.push(`/chat/${encodeURIComponent(chatChannel)}`);
+      } finally {
+        isCreatingChat.value = false;
+      }
+    }
+
+    return {
+      session,
+      newChatTitle,
+      isCreatingChat,
+      createChat,
+    };
+  },
+};
+
+const MessageBubble = {
+  props: [
+    "message",
+    "session",
+    "isDeleting",
+    "deleteMessage",
+    "availableGroups",
+    "getMessageGroups",
+    "updateMessageGroups",
+    "isUpdatingGroups",
+  ],
+
+  setup(props) {
+    const isMenuOpen = ref(false);
+    const isEditingGroups = ref(false);
+    const draftGroups = ref([]);
+
+    function toggleMenu() {
+      isMenuOpen.value = !isMenuOpen.value;
+    }
+
+    function closeMenu() {
+      isMenuOpen.value = false;
+    }
+
+    function startEditingGroups() {
+      draftGroups.value = [...props.getMessageGroups(props.message)];
+      isEditingGroups.value = true;
+      isMenuOpen.value = false;
+    }
+
+    function cancelEditingGroups() {
+      draftGroups.value = [];
+      isEditingGroups.value = false;
+    }
+
+    function toggleDraftGroup(group) {
+      if (draftGroups.value.includes(group)) {
+        draftGroups.value = draftGroups.value.filter((g) => g !== group);
+      } else {
+        draftGroups.value = [...draftGroups.value, group];
+      }
+    }
+
+    async function saveGroups() {
+      const groupsToSave = draftGroups.value.length
+        ? draftGroups.value
+        : ["General"];
+
+      await props.updateMessageGroups(props.message, groupsToSave);
+      isEditingGroups.value = false;
+    }
+
+    async function handleDelete() {
+      closeMenu();
+      await props.deleteMessage(props.message);
+    }
+
+    return {
+      isMenuOpen,
+      isEditingGroups,
+      draftGroups,
+      toggleMenu,
+      closeMenu,
+      startEditingGroups,
+      cancelEditingGroups,
+      toggleDraftGroup,
+      saveGroups,
+      handleDelete,
+    };
+  },
+
+  template: `
+    <li
+      class="message-bubble"
+      :class="{ mine: message.actor === session?.actor }"
+    >
+      <div class="message-topline">
+        <div class="message-meta">
+          <strong>
+            <graffiti-actor-to-handle :actor="message.actor"></graffiti-actor-to-handle>
+          </strong>
+
+          <span
+            v-for="group of getMessageGroups(message)"
+            :key="group"
+            class="folder-badge"
+          >
+            {{ group }}
+          </span>
+        </div>
+
+        <div
+          v-if="message.actor === session?.actor"
+          class="message-menu-wrapper"
+        >
+          <button class="menu-dot-btn" @click="toggleMenu">⋯</button>
+
+          <div v-if="isMenuOpen" class="message-menu">
+            <button @click="startEditingGroups">Edit groups</button>
+            <button
+              @click="handleDelete"
+              :disabled="isDeleting.has(message.url)"
+              class="danger-menu-btn"
+            >
+              {{ isDeleting.has(message.url) ? "Deleting..." : "Delete" }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="message-content">
+        {{ message.value.content }}
+      </div>
+
+      <div v-if="isEditingGroups" class="group-editor">
+        <p class="group-editor-title">Message groups:</p>
+
+        <label
+          v-for="group of availableGroups"
+          :key="group"
+          class="group-checkbox"
+        >
+          <input
+            type="checkbox"
+            :checked="draftGroups.includes(group)"
+            @change="toggleDraftGroup(group)"
+          />
+          {{ group }}
+        </label>
+
+        <div class="message-actions">
+          <button
+            @click="saveGroups"
+            :disabled="isUpdatingGroups.has(message.url)"
+            class="small-btn"
+          >
+            {{ isUpdatingGroups.has(message.url) ? "Saving..." : "Save" }}
+          </button>
+
+          <button @click="cancelEditingGroups" class="small-btn secondary-btn">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </li>
+  `,
+};
+
+const MyChatsPage = {
+  components: {
+    CreateChatForm,
+  },
+
+  template: `
+    <section class="panel">
+      <div class="page-toolbar">
+        <p class="page-intro">Chats you have joined.</p>
+
+        <button v-if="!showCreateForm" @click="showCreateForm = true">
+          + New Chat
+        </button>
+      </div>
+
+      <create-chat-form
+        v-if="showCreateForm"
+        :onCreated="hideCreateForm"
+        @cancel="hideCreateForm"
+      />
+
+      <p v-if="!session" class="help-text">
+        Log in to see your joined chats.
+      </p>
+
+      <p v-else-if="areChatsLoading || areJoinsLoading">
+        <em>Loading your chats...</em>
+      </p>
+
+      <template v-else>
+        <ul v-if="myChats.length" class="chat-list">
+          <li v-for="chat of myChats" :key="chat.url" class="chat-card">
+            <div>
+              <h3>{{ chat.value.title }}</h3>
+              <p class="meta">
+                Created by
+                <graffiti-actor-to-handle :actor="chat.actor"></graffiti-actor-to-handle>
+              </p>
+            </div>
+
+            <router-link
+              class="button-link"
+              :to="'/chat/' + encodeURIComponent(chat.value.channel)"
+            >
+              Open
+            </router-link>
+          </li>
+        </ul>
+
+        <div v-else class="empty-state">
+          <p>You have not joined any chats yet.</p>
+          <router-link class="button-link" to="/discover">
+            Discover Chats
+          </router-link>
+        </div>
+      </template>
+    </section>
+  `,
+
+  setup() {
+    const session = useGraffitiSession();
+    const { sortedChats, areChatsLoading } = useChats();
+    const { joinedChatChannels, areJoinsLoading } = useJoinedChats();
+
+    const showCreateForm = ref(false);
+
+    const myChats = computed(() => {
+      return sortedChats.value.filter((chat) => {
+        return joinedChatChannels.value.has(chat.value.channel);
+      });
+    });
+
+    function hideCreateForm() {
+      showCreateForm.value = false;
+    }
+
+    return {
+      session,
+      myChats,
+      areChatsLoading,
+      areJoinsLoading,
+      showCreateForm,
+      hideCreateForm,
+    };
+  },
+};
+
+const DiscoverPage = {
+  template: `
+    <section class="panel">
+      <p class="page-intro">
+        Browse public project chats and join the ones you want to keep in My Chats.
+      </p>
+
+      <p v-if="areChatsLoading"><em>Loading chats...</em></p>
+
+      <ul v-else-if="sortedChats.length" class="chat-list">
+        <li v-for="chat of sortedChats" :key="chat.url" class="chat-card">
+          <div>
+            <h3>{{ chat.value.title }}</h3>
+            <p class="meta">
+              Created by
+              <graffiti-actor-to-handle :actor="chat.actor"></graffiti-actor-to-handle>
+            </p>
+          </div>
+
+          <div class="chat-card-actions">
+            <button
+              v-if="joinedChatChannels.has(chat.value.channel)"
+              disabled
+            >
+              Joined
+            </button>
+
+            <button
+              v-if="joinedChatChannels.has(chat.value.channel)"
+              class="secondary-btn"
+              @click="leaveChat(chat)"
+              :disabled="isLeaving.has(chat.value.channel)"
+            >
+              {{ isLeaving.has(chat.value.channel) ? "Leaving..." : "Leave" }}
+            </button>
+
+            <button
+              v-else
+              @click="joinChat(chat)"
+              :disabled="isJoining.has(chat.value.channel)"
+            >
+              {{ isJoining.has(chat.value.channel) ? "Joining..." : "Join" }}
+            </button>
+          </div>
+        </li>
+      </ul>
+
+      <p v-else>No public chats yet. Create the first one from My Chats.</p>
+    </section>
+  `,
+
+  setup() {
+    const graffiti = useGraffiti();
+    const session = useGraffitiSession();
+
+    const { sortedChats, areChatsLoading } = useChats();
+    const { joinedChatChannels, getJoinObjectForChat } = useJoinedChats();
+
+    const isJoining = ref(new Set());
+    const isLeaving = ref(new Set());
+
+    async function joinChat(chat) {
+      if (!session.value) return;
+
+      isJoining.value.add(chat.value.channel);
+
+      try {
+        await postJoinChat(graffiti, session, chat.value.channel);
+      } finally {
+        isJoining.value.delete(chat.value.channel);
+      }
+    }
+
+    async function leaveChat(chat) {
+      if (!session.value) return;
+
+      const joinObject = getJoinObjectForChat(chat.value.channel);
+      if (!joinObject) return;
+
+      isLeaving.value.add(chat.value.channel);
+
+      try {
+        await graffiti.delete(joinObject, session.value);
+      } finally {
+        isLeaving.value.delete(chat.value.channel);
+      }
+    }
+
+    return {
+      sortedChats,
+      areChatsLoading,
+      joinedChatChannels,
+      isJoining,
+      isLeaving,
+      joinChat,
+      leaveChat,
+    };
+  },
+};
+
+const ChatPage = {
+  components: {
+    MessageBubble,
+  },
+
+  template: `
+    <section class="chat-view">
+      <div class="chat-header">
+        <router-link class="button-link" to="/">
+          &larr; My Chats
+        </router-link>
+
+        <h2 v-if="currentChat">{{ currentChat.value.title }}</h2>
+        <h2 v-else>Chat</h2>
+      </div>
+
+      <p v-if="areChatsLoading"><em>Loading chat...</em></p>
+
+      <p v-else-if="!currentChat" class="panel">
+        This chat could not be found.
+      </p>
+
+      <template v-else>
+        <div class="broadcast-box">
+          <strong>Live broadcast</strong>
+          <p>
+            Feature coming soon: a shared announcement box for important updates.
+          </p>
+        </div>
+
+        <div class="message-tabs">
+          <button
+            v-for="group of groupsWithAll"
+            :key="group"
+            @click="selectedGroup = group"
+            :class="{ active: selectedGroup === group }"
+          >
+            {{ group }}
+          </button>
+
+          <button
+            v-if="!isAddingGroup"
+            @click="isAddingGroup = true"
+            class="add-group-btn"
+            title="Create new message group"
+          >
+            +
+          </button>
+
+          <form
+            v-else
+            @submit.prevent="createGroupFromInlineForm"
+            class="inline-group-form"
+          >
+            <input
+              type="text"
+              v-model="newGroupName"
+              placeholder="Group name"
+            />
+
+            <button :disabled="!newGroupName.trim() || isCreatingGroup">
+              {{ isCreatingGroup ? "Adding..." : "Add" }}
+            </button>
+
+            <button
+              type="button"
+              class="secondary-btn"
+              @click="cancelNewGroup"
+            >
+              Cancel
+            </button>
+          </form>
+        </div>
+
+        <div class="messages">
+          <p v-if="areMessagesLoading"><em>Loading messages...</em></p>
+
+          <template v-else>
+            <ul v-if="visibleMessages.length" class="message-list">
+              <message-bubble
+                v-for="message of visibleMessages"
+                :key="message.url"
+                :message="message"
+                :session="$graffitiSession.value"
+                :isDeleting="isDeleting"
+                :deleteMessage="deleteMessage"
+                :availableGroups="availableGroups"
+                :getMessageGroups="getMessageGroups"
+                :updateMessageGroups="updateMessageGroups"
+                :isUpdatingGroups="isUpdatingGroups"
+              />
+            </ul>
+
+            <p v-else class="empty-folder">
+              No messages in this group yet.
+            </p>
+          </template>
+        </div>
+
+        <form @submit.prevent="sendMessage" class="message-form">
+          <select v-model="messageGroup">
+            <option
+              v-for="group of availableGroups"
+              :key="group"
+              :value="group"
+            >
+              {{ group }}
+            </option>
+          </select>
+
+          <input
+            type="text"
+            v-model="myMessage"
+            placeholder="Type your message"
+          />
+
+          <button :disabled="!myMessage.trim() || isSending">
+            {{ isSending ? "Sending..." : "Send" }}
+          </button>
+        </form>
+
+        <p v-if="!session" class="help-text">
+          Log in before sending a message.
+        </p>
+      </template>
+    </section>
+  `,
+
+  setup() {
+    const route = useRoute();
+    const graffiti = useGraffiti();
+    const session = useGraffitiSession();
+
+    const { chatObjects, areChatsLoading } = useChats();
+
+    const chatId = computed(() => {
+      return decodeURIComponent(route.params.chatId);
+    });
+
+    const currentChat = computed(() => {
+      return chatObjects.value.find((chat) => {
+        return chat.value.channel === chatId.value;
+      });
+    });
+
+    const activeMessageChannels = computed(() => {
+      return currentChat.value ? [currentChat.value.value.channel] : [];
+    });
+
+    const { objects: messageObjects, isFirstPoll: areMessagesLoading } =
+      useGraffitiDiscover(
+        activeMessageChannels,
+        {
+          properties: {
+            value: {
+              required: ["type", "content", "published"],
+              properties: {
+                type: { const: "Message" },
+                content: { type: "string" },
+                folder: { type: "string" },
+                folders: {
+                  type: "array",
+                  items: { type: "string" },
+                },
+                groups: {
+                  type: "array",
+                  items: { type: "string" },
+                },
+                published: { type: "number" },
+              },
+            },
+          },
+        },
+        undefined,
+        true,
+      );
+
+    const { objects: groupObjects } = useGraffitiDiscover(
       activeMessageChannels,
       {
         properties: {
           value: {
-            required: ["type", "content", "published"],
+            required: ["type", "name", "published"],
             properties: {
-              type: { const: "Message" },
-              content: { type: "string" },
+              type: { const: "MessageGroup" },
+              name: { type: "string" },
               published: { type: "number" },
             },
           },
@@ -77,150 +729,312 @@ function setup() {
       true,
     );
 
-  const sortedMessages = computed(() => {
-    return messageObjects.value.toSorted((a, b) => {
-      return a.value.published - b.value.published;
+    const { objects: groupUpdateObjects } = useGraffitiDiscover(
+      activeMessageChannels,
+      {
+        properties: {
+          value: {
+            required: ["type", "messageUrl", "groups", "published"],
+            properties: {
+              type: { const: "MessageGroupsUpdate" },
+              messageUrl: { type: "string" },
+              groups: {
+                type: "array",
+                items: { type: "string" },
+              },
+              published: { type: "number" },
+            },
+          },
+        },
+      },
+      undefined,
+      true,
+    );
+
+    function getOriginalMessageGroups(message) {
+      if (Array.isArray(message.value.groups)) {
+        return message.value.groups.length ? message.value.groups : ["General"];
+      }
+
+      if (Array.isArray(message.value.folders)) {
+        return message.value.folders.length
+          ? message.value.folders
+          : ["General"];
+      }
+
+      if (message.value.folder) {
+        return [message.value.folder];
+      }
+
+      return ["General"];
+    }
+
+    const customGroups = computed(() => {
+      return groupObjects.value
+        .map((group) => group.value.name)
+        .filter((name) => name && name.trim())
+        .map((name) => name.trim());
     });
-  });
 
-  // -------------------------
-  // Create chat
-  // -------------------------
-  const isCreatingChat = ref(false);
+    const latestGroupUpdates = computed(() => {
+      const updatesByMessage = new Map();
 
-  async function createChat() {
-    if (!newChatTitle.value.trim() || !session.value) return;
+      for (const update of groupUpdateObjects.value) {
+        const previous = updatesByMessage.get(update.value.messageUrl);
 
-    isCreatingChat.value = true;
-    try {
-      const chatChannel = crypto.randomUUID();
+        if (!previous || update.value.published > previous.value.published) {
+          updatesByMessage.set(update.value.messageUrl, update);
+        }
+      }
 
-      await graffiti.post(
-        {
-          value: {
-            activity: "Create",
-            type: "Chat",
-            title: newChatTitle.value.trim(),
-            channel: chatChannel,
-            published: Date.now(),
+      return updatesByMessage;
+    });
+
+    function getMessageGroups(message) {
+      const latestUpdate = latestGroupUpdates.value.get(message.url);
+
+      if (latestUpdate) {
+        return latestUpdate.value.groups.length
+          ? latestUpdate.value.groups
+          : ["General"];
+      }
+
+      return getOriginalMessageGroups(message);
+    }
+
+    const availableGroups = computed(() => {
+      const groupSet = new Set(DEFAULT_GROUPS);
+
+      for (const group of customGroups.value) {
+        groupSet.add(group);
+      }
+
+      for (const message of messageObjects.value) {
+        for (const group of getOriginalMessageGroups(message)) {
+          groupSet.add(group);
+        }
+      }
+
+      for (const update of groupUpdateObjects.value) {
+        for (const group of update.value.groups || []) {
+          groupSet.add(group);
+        }
+      }
+
+      return [...groupSet].toSorted();
+    });
+
+    const groupsWithAll = computed(() => {
+      return ["All", ...availableGroups.value];
+    });
+
+    const selectedGroup = ref("All");
+    const messageGroup = ref("General");
+
+    const sortedMessages = computed(() => {
+      return messageObjects.value.toSorted((a, b) => {
+        return a.value.published - b.value.published;
+      });
+    });
+
+    const visibleMessages = computed(() => {
+      if (selectedGroup.value === "All") {
+        return sortedMessages.value;
+      }
+
+      return sortedMessages.value.filter((message) => {
+        return getMessageGroups(message).includes(selectedGroup.value);
+      });
+    });
+
+    const isAddingGroup = ref(false);
+    const newGroupName = ref("");
+    const isCreatingGroup = ref(false);
+
+    async function createGroup(groupName) {
+      if (!groupName || !session.value || !currentChat.value) return;
+
+      isCreatingGroup.value = true;
+
+      try {
+        await graffiti.post(
+          {
+            value: {
+              type: "MessageGroup",
+              name: groupName,
+              published: Date.now(),
+            },
+            channels: [currentChat.value.value.channel],
           },
-          channels: [directoryChannel],
-        },
-        session.value,
-      );
+          session.value,
+        );
 
-      newChatTitle.value = "";
-    } finally {
-      isCreatingChat.value = false;
+        selectedGroup.value = groupName;
+        messageGroup.value = groupName;
+        newGroupName.value = "";
+        isAddingGroup.value = false;
+      } finally {
+        isCreatingGroup.value = false;
+      }
     }
-  }
 
-  // -------------------------
-  // Join chat (private memory of joined chats)
-  // -------------------------
-  async function joinChat(chatObject) {
-    selectedChat.value = chatObject;
+    async function createGroupFromInlineForm() {
+      const cleaned = newGroupName.value.trim();
 
-    if (!session.value) return;
+      if (!cleaned) return;
 
-    try {
-      await graffiti.post(
-        {
-          value: {
-            activity: "Join",
-            type: "Chat",
-            target: chatObject.value.channel,
-            published: Date.now(),
+      await createGroup(cleaned);
+    }
+
+    function cancelNewGroup() {
+      newGroupName.value = "";
+      isAddingGroup.value = false;
+    }
+
+    const myMessage = ref("");
+    const isSending = ref(false);
+
+    async function sendMessage() {
+      if (!myMessage.value.trim() || !session.value || !currentChat.value) {
+        return;
+      }
+
+      isSending.value = true;
+
+      try {
+        await graffiti.post(
+          {
+            value: {
+              type: "Message",
+              content: myMessage.value.trim(),
+              groups: [messageGroup.value],
+              published: Date.now(),
+            },
+            channels: [currentChat.value.value.channel],
           },
-          channels: [`${session.value.actor}/chat-app`],
-          allowed: [],
-        },
-        session.value,
-      );
-    } catch (e) {
-      console.error("Failed to persist join action", e);
+          session.value,
+        );
+
+        myMessage.value = "";
+      } finally {
+        isSending.value = false;
+      }
     }
-  }
 
-  function leaveChat() {
-    selectedChat.value = null;
-    myMessage.value = "";
-  }
+    const isUpdatingGroups = ref(new Set());
 
-  // -------------------------
-  // Send message
-  // -------------------------
-  const isSending = ref(false);
+    async function updateMessageGroups(message, groups) {
+      if (!session.value || !currentChat.value) return;
 
-  async function sendMessage() {
-    if (!myMessage.value.trim() || !session.value || !selectedChat.value) return;
+      isUpdatingGroups.value.add(message.url);
 
-    isSending.value = true;
-    try {
-      await graffiti.post(
-        {
-          value: {
-            type: "Message",
-            content: myMessage.value.trim(),
-            published: Date.now(),
+      try {
+        await graffiti.post(
+          {
+            value: {
+              type: "MessageGroupsUpdate",
+              messageUrl: message.url,
+              groups,
+              published: Date.now(),
+            },
+            channels: [currentChat.value.value.channel],
           },
-          channels: [selectedChat.value.value.channel],
-        },
-        session.value,
-      );
-
-      myMessage.value = "";
-    } finally {
-      isSending.value = false;
+          session.value,
+        );
+      } finally {
+        isUpdatingGroups.value.delete(message.url);
+      }
     }
-  }
 
-  // -------------------------
-  // Delete message
-  // -------------------------
-  const isDeleting = ref(new Set());
+    const isDeleting = ref(new Set());
 
-  async function deleteMessage(message) {
-    isDeleting.value.add(message.url);
-    try {
-      await graffiti.delete(message, session.value);
-    } finally {
-      isDeleting.value.delete(message.url);
+    async function deleteMessage(message) {
+      isDeleting.value.add(message.url);
+
+      try {
+        await graffiti.delete(message, session.value);
+      } finally {
+        isDeleting.value.delete(message.url);
+      }
     }
-  }
 
-  return {
-    session,
-    selectedChat,
-    newChatTitle,
-    myMessage,
+    return {
+      session,
+      currentChat,
+      areChatsLoading,
+      areMessagesLoading,
 
-    areChatsLoading,
-    sortedChats,
+      availableGroups,
+      groupsWithAll,
+      selectedGroup,
+      messageGroup,
 
-    areMessagesLoading,
-    sortedMessages,
+      isAddingGroup,
+      newGroupName,
+      isCreatingGroup,
+      createGroupFromInlineForm,
+      cancelNewGroup,
 
-    isCreatingChat,
-    isSending,
-    isDeleting,
+      visibleMessages,
+      getMessageGroups,
+      updateMessageGroups,
+      isUpdatingGroups,
 
-    createChat,
-    joinChat,
-    leaveChat,
-    sendMessage,
-    deleteMessage,
-  };
-}
+      myMessage,
+      isSending,
+      isDeleting,
+      sendMessage,
+      deleteMessage,
+    };
+  },
+};
+
+const AboutPage = {
+  template: `
+    <section class="panel">
+      <p class="page-intro">
+        This chat app is designed for students working on group projects.
+        It supports creating chats, joining chats, sending messages, and organizing
+        messages into custom groups.
+      </p>
+
+      <p>
+        The main design idea is to make group project discussions easier to manage.
+        Instead of having every message in one long stream, users can group messages
+        into categories like tasks, questions, announcements, or custom project-specific
+        groups.
+      </p>
+
+      <p>
+        Future versions will expand the live broadcast feature into an editable shared
+        announcement box.
+      </p>
+    </section>
+  `,
+};
+
+const router = createRouter({
+  history: createWebHashHistory(),
+  routes: [
+    { path: "/", component: MyChatsPage },
+    { path: "/discover", component: DiscoverPage },
+    { path: "/newchat", component: MyChatsPage },
+    { path: "/chat/:chatId", component: ChatPage },
+    { path: "/about", component: AboutPage },
+  ],
+});
 
 const App = {
   template: "#template",
-  setup,
 };
 
 createApp(App)
+  .use(router)
   .use(GraffitiPlugin, {
+    // Use this for local testing:
     // graffiti: new GraffitiLocal(),
+
+    // Use this for submitted/shared version:
     graffiti: new GraffitiDecentralized(),
   })
   .mount("#app");
