@@ -16,7 +16,7 @@ import {
 } from "@graffiti-garden/wrapper-vue";
 
 const directoryChannel = "group-project-chat";
-const DEFAULT_GROUPS = ["General", "Tasks", "Questions", "Announcements"];
+const DEFAULT_GROUPS = ["Announcements", "Questions", "Tasks"];
 
 function userChatChannel(session) {
   return session.value ? `${session.value.actor}/chat-app` : "";
@@ -243,11 +243,7 @@ const MessageBubble = {
     }
 
     async function saveGroups() {
-      const groupsToSave = draftGroups.value.length
-        ? draftGroups.value
-        : ["General"];
-
-      await props.updateMessageGroups(props.message, groupsToSave);
+      await props.updateMessageGroups(props.message, [...draftGroups.value]);
       isEditingGroups.value = false;
     }
 
@@ -290,15 +286,13 @@ const MessageBubble = {
           </span>
         </div>
 
-        <div
-          v-if="message.actor === session?.actor"
-          class="message-menu-wrapper"
-        >
+        <div class="message-menu-wrapper">
           <button class="menu-dot-btn" @click="toggleMenu">⋯</button>
 
           <div v-if="isMenuOpen" class="message-menu">
             <button @click="startEditingGroups">Edit groups</button>
             <button
+              v-if="message.actor === session?.actor"
               @click="handleDelete"
               :disabled="isDeleting.has(message.url)"
               class="danger-menu-btn"
@@ -387,12 +381,23 @@ const MyChatsPage = {
               </p>
             </div>
 
-            <router-link
-              class="button-link"
-              :to="'/chat/' + encodeURIComponent(chat.value.channel)"
-            >
-              Open
-            </router-link>
+            <div class="chat-card-actions">
+              <router-link
+                class="button-link"
+                :to="'/chat/' + encodeURIComponent(chat.value.channel)"
+              >
+                Open
+              </router-link>
+
+              <button
+                v-if="chat.actor === session?.actor"
+                class="small-btn leave-btn"
+                @click="deleteChat(chat)"
+                :disabled="isDeletingChat.has(chat.url)"
+              >
+                {{ isDeletingChat.has(chat.url) ? "Deleting..." : "Delete" }}
+              </button>
+            </div>
           </li>
         </ul>
 
@@ -407,11 +412,13 @@ const MyChatsPage = {
   `,
 
   setup() {
+    const graffiti = useGraffiti();
     const session = useGraffitiSession();
     const { sortedChats, areChatsLoading } = useChats();
     const { joinedChatChannels, areJoinsLoading } = useJoinedChats();
 
     const showCreateForm = ref(false);
+    const isDeletingChat = ref(new Set());
 
     const myChats = computed(() => {
       return sortedChats.value.filter((chat) => {
@@ -423,13 +430,28 @@ const MyChatsPage = {
       showCreateForm.value = false;
     }
 
+    async function deleteChat(chat) {
+      if (!session.value) return;
+
+      isDeletingChat.value.add(chat.url);
+
+      try {
+        await graffiti.delete(chat, session.value);
+      } finally {
+        isDeletingChat.value.delete(chat.url);
+      }
+    }
+
     return {
+      graffiti,
       session,
       myChats,
       areChatsLoading,
       areJoinsLoading,
       showCreateForm,
       hideCreateForm,
+      isDeletingChat,
+      deleteChat,
     };
   },
 };
@@ -454,21 +476,17 @@ const DiscoverPage = {
           </div>
 
           <div class="chat-card-actions">
-            <button
-              v-if="joinedChatChannels.has(chat.value.channel)"
-              disabled
-            >
-              Joined
-            </button>
+            <template v-if="joinedChatChannels.has(chat.value.channel)">
+              <span class="joined-badge">&#10003; Joined</span>
 
-            <button
-              v-if="joinedChatChannels.has(chat.value.channel)"
-              class="secondary-btn"
-              @click="leaveChat(chat)"
-              :disabled="isLeaving.has(chat.value.channel)"
-            >
-              {{ isLeaving.has(chat.value.channel) ? "Leaving..." : "Leave" }}
-            </button>
+              <button
+                class="leave-btn"
+                @click="leaveChat(chat)"
+                :disabled="isLeaving.has(chat.value.channel)"
+              >
+                {{ isLeaving.has(chat.value.channel) ? "Leaving..." : "Leave" }}
+              </button>
+            </template>
 
             <button
               v-else
@@ -606,6 +624,7 @@ const ChatPage = {
               Cancel
             </button>
           </form>
+
         </div>
 
         <div class="messages">
@@ -635,6 +654,7 @@ const ChatPage = {
 
         <form @submit.prevent="sendMessage" class="message-form">
           <select v-model="messageGroup">
+            <option value="">No group</option>
             <option
               v-for="group of availableGroups"
               :key="group"
@@ -753,20 +773,18 @@ const ChatPage = {
 
     function getOriginalMessageGroups(message) {
       if (Array.isArray(message.value.groups)) {
-        return message.value.groups.length ? message.value.groups : ["General"];
+        return message.value.groups;
       }
 
       if (Array.isArray(message.value.folders)) {
-        return message.value.folders.length
-          ? message.value.folders
-          : ["General"];
+        return message.value.folders;
       }
 
       if (message.value.folder) {
         return [message.value.folder];
       }
 
-      return ["General"];
+      return [];
     }
 
     const customGroups = computed(() => {
@@ -794,9 +812,7 @@ const ChatPage = {
       const latestUpdate = latestGroupUpdates.value.get(message.url);
 
       if (latestUpdate) {
-        return latestUpdate.value.groups.length
-          ? latestUpdate.value.groups
-          : ["General"];
+        return latestUpdate.value.groups;
       }
 
       return getOriginalMessageGroups(message);
@@ -829,7 +845,7 @@ const ChatPage = {
     });
 
     const selectedGroup = ref("All");
-    const messageGroup = ref("General");
+    const messageGroup = ref("");
 
     const sortedMessages = computed(() => {
       return messageObjects.value.toSorted((a, b) => {
@@ -907,7 +923,7 @@ const ChatPage = {
             value: {
               type: "Message",
               content: myMessage.value.trim(),
-              groups: [messageGroup.value],
+              groups: messageGroup.value ? [messageGroup.value] : [],
               published: Date.now(),
             },
             channels: [currentChat.value.value.channel],
@@ -993,21 +1009,14 @@ const AboutPage = {
   template: `
     <section class="panel">
       <p class="page-intro">
-        This chat app is designed for students working on group projects.
-        It supports creating chats, joining chats, sending messages, and organizing
-        messages into custom groups.
+        This chat app is designed to help students working on group projects, although it can be used for other purposes.
+        It supports creating and joining chatrooms, organizing messages into custom groups/folders, and broadcasing important messages.
       </p>
 
       <p>
         The main design idea is to make group project discussions easier to manage.
         Instead of having every message in one long stream, users can group messages
-        into categories like tasks, questions, announcements, or custom project-specific
-        groups.
-      </p>
-
-      <p>
-        Future versions will expand the live broadcast feature into an editable shared
-        announcement box.
+        into categories like tasks, questions, announcements, or any custom folder.
       </p>
     </section>
   `,

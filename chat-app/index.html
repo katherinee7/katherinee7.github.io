@@ -27,21 +27,28 @@
     <template id="template">
       <div class="app-shell">
         <header class="topbar">
-          <div>
-            <h1>Group Project Chat</h1>
-            <nav class="nav-links">
-              <router-link to="/">My Chats</router-link>
-              <router-link to="/discover">Discover</router-link>
-              <router-link to="/about">About</router-link>
-            </nav>
-          </div>
-
-          <button v-if="!$graffitiSession.value" @click="$graffiti.login()">
+          <button
+            v-if="!$graffitiSession.value"
+            class="auth-btn"
+            @click="$graffiti.login()"
+          >
             Log In
           </button>
-          <button v-else @click="$graffiti.logout($graffitiSession.value)">
+          <button
+            v-else
+            class="auth-btn"
+            @click="$graffiti.logout($graffitiSession.value)"
+          >
             Log Out
           </button>
+
+          <h1>CleanChat: A Simple Chat App</h1>
+
+          <nav class="nav-links">
+            <router-link to="/">My Chats</router-link>
+            <router-link to="/discover">Discover</router-link>
+            <router-link to="/about">About</router-link>
+          </nav>
         </header>
 
         <router-view></router-view>
