@@ -1,4 +1,4 @@
-import { createApp, ref, computed } from "vue";
+import { createApp, ref, computed, watch } from "vue";
 import {
   createRouter,
   createWebHashHistory,
@@ -575,22 +575,60 @@ const ChatPage = {
       </p>
 
       <template v-else>
-        <div class="broadcast-box">
-          <strong>Live broadcast</strong>
-          <p>
-            Feature coming soon: a shared announcement box for important updates.
-          </p>
+        <div v-if="activeBroadcast" class="broadcast-box broadcast-active">
+          <div class="broadcast-header">
+            <strong>&#128226; Live Broadcast</strong>
+            <span class="broadcast-author">
+              by <graffiti-actor-to-handle :actor="activeBroadcast.actor"></graffiti-actor-to-handle>
+            </span>
+            <button
+              v-if="session"
+              class="broadcast-end-btn"
+              @click="endBroadcast"
+              :disabled="isEndingBroadcast"
+            >
+              {{ isEndingBroadcast ? "Ending..." : "End Broadcast" }}
+            </button>
+          </div>
+          <textarea
+            class="broadcast-editor"
+            v-model="broadcastDraft"
+            placeholder="Type important info here..."
+          ></textarea>
+          <div class="broadcast-actions">
+            <button
+              class="broadcast-update-btn"
+              @click="updateBroadcast"
+              :disabled="isUpdatingBroadcast || broadcastDraft === activeBroadcast.value.content"
+            >
+              {{ isUpdatingBroadcast ? "Updating..." : "Update Broadcast" }}
+            </button>
+          </div>
+        </div>
+
+        <div v-else-if="!activeBroadcast" class="broadcast-box broadcast-idle">
+          <p class="broadcast-placeholder">No active broadcast.</p>
         </div>
 
         <div class="message-tabs">
-          <button
+          <span
             v-for="group of groupsWithAll"
             :key="group"
-            @click="selectedGroup = group"
-            :class="{ active: selectedGroup === group }"
+            class="group-tab-wrapper"
           >
-            {{ group }}
-          </button>
+            <button
+              @click="selectedGroup = group"
+              :class="{ active: selectedGroup === group }"
+            >
+              {{ group }}
+            </button>
+            <button
+              v-if="canDeleteGroup(group)"
+              class="group-delete-x"
+              @click.stop="confirmDeleteGroup(group)"
+              title="Delete group"
+            >&times;</button>
+          </span>
 
           <button
             v-if="!isAddingGroup"
@@ -627,6 +665,16 @@ const ChatPage = {
 
         </div>
 
+        <div v-if="groupToDelete" class="delete-group-confirm">
+          <p>Delete group <strong>"{{ groupToDelete }}"</strong>?</p>
+          <div class="delete-group-actions">
+            <button class="leave-btn" @click="executeDeleteGroup" :disabled="isDeletingGroup">
+              {{ isDeletingGroup ? "Deleting..." : "Delete" }}
+            </button>
+            <button class="secondary-btn" @click="groupToDelete = null">Cancel</button>
+          </div>
+        </div>
+
         <div class="messages">
           <p v-if="areMessagesLoading"><em>Loading messages...</em></p>
 
@@ -652,28 +700,39 @@ const ChatPage = {
           </template>
         </div>
 
-        <form @submit.prevent="sendMessage" class="message-form">
-          <select v-model="messageGroup">
-            <option value="">No group</option>
-            <option
-              v-for="group of availableGroups"
-              :key="group"
-              :value="group"
-            >
-              {{ group }}
-            </option>
-          </select>
-
-          <input
-            type="text"
-            v-model="myMessage"
-            placeholder="Type your message"
-          />
-
-          <button :disabled="!myMessage.trim() || isSending">
-            {{ isSending ? "Sending..." : "Send" }}
+        <div class="message-form-row">
+          <button
+            v-if="!activeBroadcast && session"
+            class="broadcast-start-btn"
+            @click="startBroadcast"
+            :disabled="isStartingBroadcast"
+          >
+            {{ isStartingBroadcast ? "Starting..." : "&#128226; Broadcast" }}
           </button>
-        </form>
+
+          <form @submit.prevent="sendMessage" class="message-form">
+            <select v-model="messageGroup">
+              <option value="">No group</option>
+              <option
+                v-for="group of availableGroups"
+                :key="group"
+                :value="group"
+              >
+                {{ group }}
+              </option>
+            </select>
+
+            <input
+              type="text"
+              v-model="myMessage"
+              placeholder="Type your message"
+            />
+
+            <button :disabled="!myMessage.trim() || isSending" :class="{ 'send-success': sendSuccess }">
+              {{ isSending ? "Sending..." : "Send" }}
+            </button>
+          </form>
+        </div>
 
         <p v-if="!session" class="help-text">
           Log in before sending a message.
@@ -771,6 +830,32 @@ const ChatPage = {
       true,
     );
 
+    const { objects: groupDeletionObjects } = useGraffitiDiscover(
+      activeMessageChannels,
+      {
+        properties: {
+          value: {
+            required: ["type", "name", "published"],
+            properties: {
+              type: { const: "GroupDeletion" },
+              name: { type: "string" },
+              published: { type: "number" },
+            },
+          },
+        },
+      },
+      undefined,
+      true,
+    );
+
+    const deletedGroupNames = computed(() => {
+      const deleted = new Set();
+      for (const del of groupDeletionObjects.value) {
+        deleted.add(del.value.name);
+      }
+      return deleted;
+    });
+
     function getOriginalMessageGroups(message) {
       if (Array.isArray(message.value.groups)) {
         return message.value.groups;
@@ -809,13 +894,16 @@ const ChatPage = {
     });
 
     function getMessageGroups(message) {
+      let groups;
       const latestUpdate = latestGroupUpdates.value.get(message.url);
 
       if (latestUpdate) {
-        return latestUpdate.value.groups;
+        groups = latestUpdate.value.groups;
+      } else {
+        groups = getOriginalMessageGroups(message);
       }
 
-      return getOriginalMessageGroups(message);
+      return groups.filter((g) => !deletedGroupNames.value.has(g));
     }
 
     const availableGroups = computed(() => {
@@ -835,6 +923,10 @@ const ChatPage = {
         for (const group of update.value.groups || []) {
           groupSet.add(group);
         }
+      }
+
+      for (const name of deletedGroupNames.value) {
+        groupSet.delete(name);
       }
 
       return [...groupSet].toSorted();
@@ -907,8 +999,55 @@ const ChatPage = {
       isAddingGroup.value = false;
     }
 
+    const groupToDelete = ref(null);
+    const isDeletingGroup = ref(false);
+
+    function canDeleteGroup(group) {
+      return group !== "All";
+    }
+
+    function confirmDeleteGroup(group) {
+      groupToDelete.value = group;
+    }
+
+    async function executeDeleteGroup() {
+      if (!session.value || !groupToDelete.value || !currentChat.value) return;
+
+      isDeletingGroup.value = true;
+
+      try {
+        await graffiti.post(
+          {
+            value: {
+              type: "GroupDeletion",
+              name: groupToDelete.value,
+              published: Date.now(),
+            },
+            channels: [currentChat.value.value.channel],
+          },
+          session.value,
+        );
+
+        const groupObj = groupObjects.value.find(
+          (g) => g.value.name === groupToDelete.value
+        );
+        if (groupObj) {
+          try { await graffiti.delete(groupObj, session.value); } catch {}
+        }
+
+        if (selectedGroup.value === groupToDelete.value) {
+          selectedGroup.value = "All";
+        }
+
+        groupToDelete.value = null;
+      } finally {
+        isDeletingGroup.value = false;
+      }
+    }
+
     const myMessage = ref("");
     const isSending = ref(false);
+    const sendSuccess = ref(false);
 
     async function sendMessage() {
       if (!myMessage.value.trim() || !session.value || !currentChat.value) {
@@ -932,6 +1071,8 @@ const ChatPage = {
         );
 
         myMessage.value = "";
+        sendSuccess.value = true;
+        setTimeout(() => { sendSuccess.value = false; }, 400);
       } finally {
         isSending.value = false;
       }
@@ -974,6 +1115,110 @@ const ChatPage = {
       }
     }
 
+    // --- Broadcast feature ---
+    const { objects: broadcastObjects } = useGraffitiDiscover(
+      activeMessageChannels,
+      {
+        properties: {
+          value: {
+            required: ["type", "content", "published"],
+            properties: {
+              type: { const: "Broadcast" },
+              content: { type: "string" },
+              published: { type: "number" },
+            },
+          },
+        },
+      },
+      undefined,
+      true,
+    );
+
+    const activeBroadcast = computed(() => {
+      if (!broadcastObjects.value.length) return null;
+      return broadcastObjects.value.toSorted(
+        (a, b) => b.value.published - a.value.published
+      )[0];
+    });
+
+    const isStartingBroadcast = ref(false);
+    const isEndingBroadcast = ref(false);
+    const isUpdatingBroadcast = ref(false);
+    const broadcastDraft = ref("");
+
+    watch(activeBroadcast, (bc) => {
+      if (bc) {
+        broadcastDraft.value = bc.value.content;
+      } else {
+        broadcastDraft.value = "";
+      }
+    }, { immediate: true });
+
+    async function startBroadcast() {
+      if (!session.value || !currentChat.value) return;
+
+      isStartingBroadcast.value = true;
+
+      try {
+        await graffiti.post(
+          {
+            value: {
+              type: "Broadcast",
+              content: "",
+              published: Date.now(),
+            },
+            channels: [currentChat.value.value.channel],
+          },
+          session.value,
+        );
+      } finally {
+        isStartingBroadcast.value = false;
+      }
+    }
+
+    async function updateBroadcast() {
+      if (!session.value || !activeBroadcast.value || !currentChat.value) return;
+
+      isUpdatingBroadcast.value = true;
+
+      try {
+        await graffiti.patch(
+          { value: { content: broadcastDraft.value } },
+          activeBroadcast.value,
+          session.value,
+        );
+      } catch (e) {
+        console.warn("Broadcast patch failed, falling back to post+delete", e);
+        const oldBroadcast = activeBroadcast.value;
+        await graffiti.post(
+          {
+            value: {
+              type: "Broadcast",
+              content: broadcastDraft.value,
+              published: Date.now(),
+            },
+            channels: [currentChat.value.value.channel],
+          },
+          session.value,
+        );
+        try { await graffiti.delete(oldBroadcast, session.value); } catch {}
+      } finally {
+        isUpdatingBroadcast.value = false;
+      }
+    }
+
+    async function endBroadcast() {
+      if (!session.value || !activeBroadcast.value) return;
+
+      isEndingBroadcast.value = true;
+
+      try {
+        await graffiti.delete(activeBroadcast.value, session.value);
+      } finally {
+        isEndingBroadcast.value = false;
+      }
+    }
+
     return {
       session,
       currentChat,
@@ -991,6 +1236,12 @@ const ChatPage = {
       createGroupFromInlineForm,
       cancelNewGroup,
 
+      canDeleteGroup,
+      confirmDeleteGroup,
+      groupToDelete,
+      isDeletingGroup,
+      executeDeleteGroup,
+
       visibleMessages,
       getMessageGroups,
       updateMessageGroups,
@@ -998,9 +1249,19 @@ const ChatPage = {
 
       myMessage,
       isSending,
+      sendSuccess,
       isDeleting,
       sendMessage,
       deleteMessage,
+
+      activeBroadcast,
+      broadcastDraft,
+      isStartingBroadcast,
+      isEndingBroadcast,
+      isUpdatingBroadcast,
+      startBroadcast,
+      updateBroadcast,
+      endBroadcast,
     };
   },
 };
