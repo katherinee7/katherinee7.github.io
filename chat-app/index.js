@@ -16,7 +16,27 @@ import {
 } from "@graffiti-garden/wrapper-vue";
 
 const directoryChannel = "group-project-chat";
+const profileChannel = "group-project-chat-profiles";
 const DEFAULT_GROUPS = ["Announcements", "Questions", "Tasks"];
+
+const GROUP_PALETTE = [
+  { bg: "#dbeafe", text: "#1d4ed8" },
+  { bg: "#fce7d3", text: "#c2410c" },
+  { bg: "#d1fae5", text: "#047857" },
+  { bg: "#fde6f2", text: "#be185d" },
+  { bg: "#e0e7ff", text: "#4338ca" },
+  { bg: "#fef3c7", text: "#b45309" },
+  { bg: "#ccfbf1", text: "#0f766e" },
+  { bg: "#fce4ec", text: "#ad1457" },
+  { bg: "#e8eaf6", text: "#283593" },
+  { bg: "#fff3e0", text: "#e65100" },
+  { bg: "#e0f2f1", text: "#00695c" },
+  { bg: "#f3e5f5", text: "#7b1fa2" },
+  { bg: "#e3f2fd", text: "#1565c0" },
+  { bg: "#fbe9e7", text: "#bf360c" },
+  { bg: "#e8f5e9", text: "#2e7d32" },
+];
+
 
 function userChatChannel(session) {
   return session.value ? `${session.value.actor}/chat-app` : "";
@@ -118,6 +138,43 @@ function useJoinedChats() {
   };
 }
 
+function useProfiles() {
+  const { objects: profileObjects } = useGraffitiDiscover(
+    [profileChannel],
+    {
+      properties: {
+        value: {
+          required: ["type", "displayName"],
+          properties: {
+            type: { const: "Profile" },
+            displayName: { type: "string" },
+          },
+        },
+      },
+    },
+    undefined,
+    true,
+  );
+
+  const displayNameMap = computed(() => {
+    const map = new Map();
+    for (const profile of profileObjects.value) {
+      const existing = map.get(profile.actor);
+      if (!existing || (profile.value.published || 0) > (existing.value.published || 0)) {
+        map.set(profile.actor, profile);
+      }
+    }
+    return map;
+  });
+
+  function getDisplayName(actor) {
+    const profile = displayNameMap.value.get(actor);
+    return profile ? profile.value.displayName : null;
+  }
+
+  return { profileObjects, displayNameMap, getDisplayName };
+}
+
 const CreateChatForm = {
   props: ["onCreated"],
 
@@ -208,6 +265,8 @@ const MessageBubble = {
     "getMessageGroups",
     "updateMessageGroups",
     "isUpdatingGroups",
+    "getGroupColor",
+    "getDisplayName",
   ],
 
   setup(props) {
@@ -274,13 +333,17 @@ const MessageBubble = {
       <div class="message-topline">
         <div class="message-meta">
           <strong>
-            <graffiti-actor-to-handle :actor="message.actor"></graffiti-actor-to-handle>
+            <template v-if="getDisplayName(message.actor)">
+              {{ getDisplayName(message.actor) }}
+            </template>
+            <graffiti-actor-to-handle v-else :actor="message.actor"></graffiti-actor-to-handle>
           </strong>
 
           <span
             v-for="group of getMessageGroups(message)"
             :key="group"
             class="folder-badge"
+            :style="{ background: getGroupColor(group).bg, color: getGroupColor(group).text }"
           >
             {{ group }}
           </span>
@@ -506,6 +569,7 @@ const DiscoverPage = {
   setup() {
     const graffiti = useGraffiti();
     const session = useGraffitiSession();
+    const router = useRouter();
 
     const { sortedChats, areChatsLoading } = useChats();
     const { joinedChatChannels, getJoinObjectForChat } = useJoinedChats();
@@ -520,6 +584,7 @@ const DiscoverPage = {
 
       try {
         await postJoinChat(graffiti, session, chat.value.channel);
+        router.push(`/chat/${encodeURIComponent(chat.value.channel)}`);
       } finally {
         isJoining.value.delete(chat.value.channel);
       }
@@ -619,6 +684,7 @@ const ChatPage = {
             <button
               @click="selectedGroup = group"
               :class="{ active: selectedGroup === group }"
+              :style="group !== 'All' ? { background: getGroupColor(group).bg, color: getGroupColor(group).text, boxShadow: selectedGroup === group ? 'inset 0 0 0 2px ' + getGroupColor(group).text : 'none' } : {}"
             >
               {{ group }}
             </button>
@@ -691,6 +757,8 @@ const ChatPage = {
                 :getMessageGroups="getMessageGroups"
                 :updateMessageGroups="updateMessageGroups"
                 :isUpdatingGroups="isUpdatingGroups"
+                :getGroupColor="getGroupColor"
+                :getDisplayName="getDisplayName"
               />
             </ul>
 
@@ -711,17 +779,6 @@ const ChatPage = {
           </button>
 
           <form @submit.prevent="sendMessage" class="message-form">
-            <select v-model="messageGroup">
-              <option value="">No group</option>
-              <option
-                v-for="group of availableGroups"
-                :key="group"
-                :value="group"
-              >
-                {{ group }}
-              </option>
-            </select>
-
             <input
               type="text"
               v-model="myMessage"
@@ -733,6 +790,10 @@ const ChatPage = {
             </button>
           </form>
         </div>
+
+        <p class="group-hint">
+          Tip: use <code>/groupname</code> to tag a message, e.g. <code>/announcements meeting at 3pm</code>
+        </p>
 
         <p v-if="!session" class="help-text">
           Log in before sending a message.
@@ -747,6 +808,7 @@ const ChatPage = {
     const session = useGraffitiSession();
 
     const { chatObjects, areChatsLoading } = useChats();
+    const { getDisplayName } = useProfiles();
 
     const chatId = computed(() => {
       return decodeURIComponent(route.params.chatId);
@@ -936,8 +998,19 @@ const ChatPage = {
       return ["All", ...availableGroups.value];
     });
 
+    const groupColorMap = computed(() => {
+      const map = new Map();
+      for (let i = 0; i < availableGroups.value.length; i++) {
+        map.set(availableGroups.value[i], GROUP_PALETTE[i % GROUP_PALETTE.length]);
+      }
+      return map;
+    });
+
+    function getGroupColor(name) {
+      return groupColorMap.value.get(name) || GROUP_PALETTE[0];
+    }
+
     const selectedGroup = ref("All");
-    const messageGroup = ref("");
 
     const sortedMessages = computed(() => {
       return messageObjects.value.toSorted((a, b) => {
@@ -978,7 +1051,6 @@ const ChatPage = {
         );
 
         selectedGroup.value = groupName;
-        messageGroup.value = groupName;
         newGroupName.value = "";
         isAddingGroup.value = false;
       } finally {
@@ -1049,6 +1121,32 @@ const ChatPage = {
     const isSending = ref(false);
     const sendSuccess = ref(false);
 
+    function parseGroupTags(text) {
+      const matchedGroups = [];
+      let content = text;
+
+      const groupNames = availableGroups.value.map((g) => g.toLowerCase());
+
+      const slashPattern = /\/(\S+)/g;
+      let match;
+      const tokensToRemove = [];
+
+      while ((match = slashPattern.exec(text)) !== null) {
+        const candidate = match[1].toLowerCase();
+        const idx = groupNames.indexOf(candidate);
+        if (idx !== -1) {
+          matchedGroups.push(availableGroups.value[idx]);
+          tokensToRemove.push(match[0]);
+        }
+      }
+
+      for (const token of tokensToRemove) {
+        content = content.replace(token, "");
+      }
+
+      return { content: content.trim(), groups: [...new Set(matchedGroups)] };
+    }
+
     async function sendMessage() {
       if (!myMessage.value.trim() || !session.value || !currentChat.value) {
         return;
@@ -1057,12 +1155,14 @@ const ChatPage = {
       isSending.value = true;
 
       try {
+        const { content, groups } = parseGroupTags(myMessage.value.trim());
+
         await graffiti.post(
           {
             value: {
               type: "Message",
-              content: myMessage.value.trim(),
-              groups: messageGroup.value ? [messageGroup.value] : [],
+              content: content || myMessage.value.trim(),
+              groups,
               published: Date.now(),
             },
             channels: [currentChat.value.value.channel],
@@ -1228,7 +1328,6 @@ const ChatPage = {
       availableGroups,
       groupsWithAll,
       selectedGroup,
-      messageGroup,
 
       isAddingGroup,
       newGroupName,
@@ -1236,6 +1335,8 @@ const ChatPage = {
       createGroupFromInlineForm,
       cancelNewGroup,
 
+      getGroupColor,
+      getDisplayName,
       canDeleteGroup,
       confirmDeleteGroup,
       groupToDelete,
@@ -1266,6 +1367,120 @@ const ChatPage = {
   },
 };
 
+const ProfilePage = {
+  template: `
+    <section class="panel">
+      <h2>Your Profile</h2>
+
+      <p v-if="!session" class="help-text">
+        Log in to set your display name.
+      </p>
+
+      <template v-else>
+        <div class="profile-field">
+          <label for="display-name">Display Name</label>
+          <div class="profile-input-row">
+            <input
+              id="display-name"
+              type="text"
+              v-model="draftName"
+              placeholder="Enter a display name"
+            />
+            <button
+              @click="saveName"
+              :disabled="isSaving || !draftName.trim() || draftName.trim() === currentName"
+            >
+              {{ isSaving ? "Saving..." : "Save" }}
+            </button>
+          </div>
+        </div>
+
+        <p v-if="currentName" class="profile-current">
+          Currently displayed as: <strong>{{ currentName }}</strong>
+        </p>
+        <p v-else class="help-text">
+          You haven't set a display name yet. Others will see your account handle.
+        </p>
+      </template>
+    </section>
+  `,
+
+  setup() {
+    const graffiti = useGraffiti();
+    const session = useGraffitiSession();
+    const { profileObjects, displayNameMap } = useProfiles();
+
+    const draftName = ref("");
+    const isSaving = ref(false);
+
+    const myProfile = computed(() => {
+      if (!session.value) return null;
+      return displayNameMap.value.get(session.value.actor) || null;
+    });
+
+    const currentName = computed(() => {
+      return myProfile.value ? myProfile.value.value.displayName : "";
+    });
+
+    watch(currentName, (name) => {
+      if (name) draftName.value = name;
+    }, { immediate: true });
+
+    async function saveName() {
+      if (!session.value || !draftName.value.trim()) return;
+
+      isSaving.value = true;
+
+      try {
+        if (myProfile.value) {
+          try {
+            await graffiti.patch(
+              { value: { displayName: draftName.value.trim(), published: Date.now() } },
+              myProfile.value,
+              session.value,
+            );
+          } catch {
+            await graffiti.post(
+              {
+                value: {
+                  type: "Profile",
+                  displayName: draftName.value.trim(),
+                  published: Date.now(),
+                },
+                channels: [profileChannel],
+              },
+              session.value,
+            );
+            try { await graffiti.delete(myProfile.value, session.value); } catch {}
+          }
+        } else {
+          await graffiti.post(
+            {
+              value: {
+                type: "Profile",
+                displayName: draftName.value.trim(),
+                published: Date.now(),
+              },
+              channels: [profileChannel],
+            },
+            session.value,
+          );
+        }
+      } finally {
+        isSaving.value = false;
+      }
+    }
+
+    return {
+      session,
+      draftName,
+      isSaving,
+      currentName,
+      saveName,
+    };
+  },
+};
+
 const AboutPage = {
   template: `
     <section class="panel">
@@ -1290,6 +1505,7 @@ const router = createRouter({
     { path: "/discover", component: DiscoverPage },
     { path: "/newchat", component: MyChatsPage },
     { path: "/chat/:chatId", component: ChatPage },
+    { path: "/profile", component: ProfilePage },
     { path: "/about", component: AboutPage },
   ],
 });

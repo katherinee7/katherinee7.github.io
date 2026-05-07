@@ -335,6 +335,19 @@ button:disabled {
   align-items: flex-start;
 }
 
+.group-hint {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  color: #8878a0;
+}
+
+.group-hint code {
+  background: #f0eaf8;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}
+
 .broadcast-start-btn {
   background: #e8dff5;
   color: #5a3e8a;
@@ -480,6 +493,7 @@ button:disabled {
 .message-form {
   display: flex;
   gap: 12px;
+  flex: 1;
 }
 
 .message-form button.send-success {
@@ -524,15 +538,15 @@ button:disabled {
 .message-tabs .group-tab-wrapper > button:first-child {
   background: #e8dff5;
   color: #5a3e8a;
+  transition: filter 0.15s, background 0.15s, color 0.15s;
 }
 
 .message-tabs .group-tab-wrapper > button:first-child:hover:not(:disabled) {
-  background: #ddd0f0;
+  filter: brightness(0.93);
 }
 
 .message-tabs .group-tab-wrapper > button:first-child.active {
-  background: #9678c4;
-  color: white;
+  font-weight: 700;
 }
 
 .group-delete-x {
@@ -606,14 +620,13 @@ button:disabled {
 
 .folder-badge {
   display: inline-block;
-  margin-left: 8px;
-  margin-top: 4px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: #e8dff5;
-  color: #5a3e8a;
-  font-size: 0.75rem;
-  font-weight: 700;
+  margin-left: 6px;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  opacity: 0.75;
 }
 
 .empty-folder,
@@ -678,4 +691,31 @@ button:disabled {
   .inline-group-form input {
     max-width: none;
   }
+}
+
+.profile-field {
+  margin-top: 16px;
+}
+
+.profile-field label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #3d2c5e;
+}
+
+.profile-input-row {
+  display: flex;
+  gap: 10px;
+}
+
+.profile-input-row input {
+  flex: 1;
+  max-width: 300px;
+}
+
+.profile-current {
+  margin-top: 14px;
+  color: #6b6080;
+  font-size: 0.95rem;
 }
