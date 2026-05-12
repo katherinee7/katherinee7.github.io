@@ -1,4 +1,4 @@
-import { createApp, ref, computed, watch, nextTick, onMounted } from "vue";
+import { createApp, ref, computed, watch, nextTick, provide, inject } from "vue";
 import {
   createRouter,
   createWebHashHistory,
@@ -18,6 +18,18 @@ import {
 const directoryChannel = "group-project-chat";
 const profileChannel = "group-project-chat-profiles";
 const DEFAULT_GROUPS = ["Announcements", "Questions", "Tasks"];
+
+function linkifyText(text) {
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  return escaped.replace(
+    /(https?:\/\/[^\s<>"')\]]+)/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>',
+  );
+}
 
 const GROUP_PALETTE = [
   { bg: "#dbeafe", text: "#1d4ed8" },
@@ -58,6 +70,7 @@ async function postJoinChat(graffiti, session, chatChannel) {
     },
     session.value,
   );
+
 }
 
 function useChats() {
@@ -280,8 +293,19 @@ const MessageBubble = {
     const draftGroups = ref([]);
     const isEditingContent = ref(false);
     const editDraft = ref("");
+    const menuBtnRef = ref(null);
+    const menuAbove = ref(false);
 
     function toggleMenu() {
+      if (!isMenuOpen.value && menuBtnRef.value) {
+        const btn = menuBtnRef.value;
+        const scrollParent = btn.closest(".messages");
+        if (scrollParent) {
+          const btnRect = btn.getBoundingClientRect();
+          const containerRect = scrollParent.getBoundingClientRect();
+          menuAbove.value = (containerRect.bottom - btnRect.bottom) < 120;
+        }
+      }
       isMenuOpen.value = !isMenuOpen.value;
     }
 
@@ -341,6 +365,8 @@ const MessageBubble = {
       draftGroups,
       isEditingContent,
       editDraft,
+      menuBtnRef,
+      menuAbove,
       toggleMenu,
       closeMenu,
       startEditingGroups,
@@ -351,6 +377,7 @@ const MessageBubble = {
       startEditingContent,
       cancelEditingContent,
       saveEditedContent,
+      linkifyText,
     };
   },
 
@@ -393,9 +420,9 @@ const MessageBubble = {
         </div>
 
         <div v-if="!selectMode" class="message-menu-wrapper">
-          <button class="menu-dot-btn" @click="toggleMenu">⋯</button>
+          <button class="menu-dot-btn" ref="menuBtnRef" @click="toggleMenu">⋯</button>
 
-          <div v-if="isMenuOpen" class="message-menu">
+          <div v-if="isMenuOpen" class="message-menu" :class="{ 'menu-above': menuAbove }">
             <button
               v-if="message.actor === session?.actor"
               @click="startEditingContent"
@@ -435,8 +462,7 @@ const MessageBubble = {
         </div>
       </div>
 
-      <div v-else class="message-content">
-        {{ message.value.content }}
+      <div v-else class="message-content" v-html="linkifyText(message.value.content)">
       </div>
 
       <div v-if="isEditingGroups" class="group-editor">
@@ -522,12 +548,11 @@ const MyChatsPage = {
               </router-link>
 
               <button
-                v-if="chat.actor === session?.actor"
                 class="small-btn leave-btn"
-                @click="deleteChat(chat)"
-                :disabled="isDeletingChat.has(chat.url)"
+                @click="leaveChat(chat)"
+                :disabled="isLeaving.has(chat.value.channel)"
               >
-                {{ isDeletingChat.has(chat.url) ? "Deleting..." : "Delete" }}
+                {{ isLeaving.has(chat.value.channel) ? "Leaving..." : "Leave" }}
               </button>
             </div>
           </li>
@@ -546,11 +571,11 @@ const MyChatsPage = {
   setup() {
     const graffiti = useGraffiti();
     const session = useGraffitiSession();
-    const { sortedChats, areChatsLoading } = useChats();
-    const { joinedChatChannels, areJoinsLoading } = useJoinedChats();
+    const { sortedChats, areChatsLoading } = inject("chatsData");
+    const { joinedChatChannels, getJoinObjectForChat, areJoinsLoading } = inject("joinedChatsData");
 
     const showCreateForm = ref(false);
-    const isDeletingChat = ref(new Set());
+    const isLeaving = ref(new Set());
 
     const myChats = computed(() => {
       return sortedChats.value.filter((chat) => {
@@ -562,15 +587,15 @@ const MyChatsPage = {
       showCreateForm.value = false;
     }
 
-    async function deleteChat(chat) {
+    async function leaveChat(chat) {
       if (!session.value) return;
-
-      isDeletingChat.value.add(chat.url);
-
+      const joinObject = getJoinObjectForChat(chat.value.channel);
+      if (!joinObject) return;
+      isLeaving.value.add(chat.value.channel);
       try {
-        await graffiti.delete(chat, session.value);
+        await graffiti.delete(joinObject, session.value);
       } finally {
-        isDeletingChat.value.delete(chat.url);
+        isLeaving.value.delete(chat.value.channel);
       }
     }
 
@@ -582,8 +607,8 @@ const MyChatsPage = {
       areJoinsLoading,
       showCreateForm,
       hideCreateForm,
-      isDeletingChat,
-      deleteChat,
+      isLeaving,
+      leaveChat,
     };
   },
 };
@@ -612,7 +637,7 @@ const DiscoverPage = {
               <span class="joined-badge">&#10003; Joined</span>
 
               <button
-                class="leave-btn"
+                class="small-btn leave-btn"
                 @click="leaveChat(chat)"
                 :disabled="isLeaving.has(chat.value.channel)"
               >
@@ -640,8 +665,8 @@ const DiscoverPage = {
     const session = useGraffitiSession();
     const router = useRouter();
 
-    const { sortedChats, areChatsLoading } = useChats();
-    const { joinedChatChannels, getJoinObjectForChat } = useJoinedChats();
+    const { sortedChats, areChatsLoading } = inject("chatsData");
+    const { joinedChatChannels, getJoinObjectForChat } = inject("joinedChatsData");
 
     const isJoining = ref(new Set());
     const isLeaving = ref(new Set());
@@ -661,12 +686,9 @@ const DiscoverPage = {
 
     async function leaveChat(chat) {
       if (!session.value) return;
-
       const joinObject = getJoinObjectForChat(chat.value.channel);
       if (!joinObject) return;
-
       isLeaving.value.add(chat.value.channel);
-
       try {
         await graffiti.delete(joinObject, session.value);
       } finally {
@@ -700,6 +722,13 @@ const ChatPage = {
 
         <h2 v-if="currentChat">{{ currentChat.value.title }}</h2>
         <h2 v-else>Chat</h2>
+
+        <button
+          v-if="currentChat && currentChat.actor === session?.actor"
+          class="gear-btn"
+          @click="showChatSettings = !showChatSettings"
+          title="Chat settings"
+        >&#9881;</button>
       </div>
 
       <p v-if="areChatsLoading"><em>Loading chat...</em></p>
@@ -709,6 +738,35 @@ const ChatPage = {
       </p>
 
       <template v-else>
+        <div v-if="showChatSettings" class="chat-settings-panel">
+          <div class="settings-field">
+            <label>Rename Chat</label>
+            <div class="profile-input-row">
+              <input
+                type="text"
+                v-model="renameValue"
+                placeholder="New chat name"
+              />
+              <button
+                class="small-btn"
+                @click="renameChat"
+                :disabled="!renameValue.trim() || renameValue.trim() === currentChat.value.title || isRenaming"
+              >
+                {{ isRenaming ? "Saving..." : "Save" }}
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-field">
+            <button
+              class="small-btn leave-btn"
+              @click="deleteChat"
+              :disabled="isDeletingChat"
+            >
+              {{ isDeletingChat ? "Deleting..." : "Delete Chat" }}
+            </button>
+          </div>
+        </div>
         <div v-if="activeBroadcast" class="broadcast-box broadcast-active">
           <div class="broadcast-header">
             <strong>&#128226; Live Broadcast</strong>
@@ -926,8 +984,14 @@ const ChatPage = {
     const graffiti = useGraffiti();
     const session = useGraffitiSession();
 
-    const { chatObjects, areChatsLoading } = useChats();
-    const { getDisplayName } = useProfiles();
+    const { chatObjects, areChatsLoading } = inject("chatsData");
+    const { getDisplayName } = inject("profilesData");
+    const router = useRouter();
+
+    const showChatSettings = ref(false);
+    const renameValue = ref("");
+    const isRenaming = ref(false);
+    const isDeletingChat = ref(false);
 
     const chatId = computed(() => {
       return decodeURIComponent(route.params.chatId);
@@ -1161,10 +1225,14 @@ const ChatPage = {
 
     watch(
       () => visibleMessages.value.length,
-      () => scrollToBottom(),
+      (newLen, oldLen) => {
+        if (newLen > oldLen) scrollToBottom();
+      },
     );
 
-    onMounted(() => scrollToBottom());
+    watch(areMessagesLoading, (loading) => {
+      if (!loading) scrollToBottom();
+    });
 
     const isAddingGroup = ref(false);
     const newGroupName = ref("");
@@ -1442,6 +1510,47 @@ const ChatPage = {
       }
     }
 
+    watch(() => currentChat.value?.value?.title, (title) => {
+      if (title && !showChatSettings.value) {
+        renameValue.value = title;
+      }
+    }, { immediate: true });
+
+    async function renameChat() {
+      if (!session.value || !currentChat.value || !renameValue.value.trim()) return;
+      isRenaming.value = true;
+      try {
+        await graffiti.patch(
+          { value: { title: renameValue.value.trim() } },
+          currentChat.value,
+          session.value,
+        );
+      } catch (e) {
+        console.warn("Patch failed for rename, falling back to post+delete", e);
+        await graffiti.post(
+          {
+            value: { ...currentChat.value.value, title: renameValue.value.trim() },
+            channels: [directoryChannel],
+          },
+          session.value,
+        );
+        try { await graffiti.delete(currentChat.value, session.value); } catch {}
+      } finally {
+        isRenaming.value = false;
+      }
+    }
+
+    async function deleteChat() {
+      if (!session.value || !currentChat.value) return;
+      isDeletingChat.value = true;
+      try {
+        await graffiti.delete(currentChat.value, session.value);
+        router.push("/");
+      } finally {
+        isDeletingChat.value = false;
+      }
+    }
+
     // --- Broadcast feature ---
     const { objects: broadcastObjects } = useGraffitiDiscover(
       activeMessageChannels,
@@ -1559,6 +1668,13 @@ const ChatPage = {
       areChatsLoading,
       areMessagesLoading,
 
+      showChatSettings,
+      renameValue,
+      isRenaming,
+      isDeletingChat,
+      renameChat,
+      deleteChat,
+
       availableGroups,
       groupsWithAll,
       selectedGroup,
@@ -1649,6 +1765,19 @@ const ProfilePage = {
         <p v-else class="help-text">
           You haven't set a display name yet. Others will see your account handle.
         </p>
+
+        <div class="profile-field">
+          <label>Your Handle</label>
+          <div class="profile-handle-row">
+            <span class="profile-handle-value">
+              <graffiti-actor-to-handle :actor="session.actor"></graffiti-actor-to-handle>
+            </span>
+            <button class="copy-handle-btn" @click="copyHandle">
+              {{ copySuccess ? "Copied!" : "Copy" }}
+            </button>
+          </div>
+          <p class="profile-handle-hint">Share this handle so others can identify you.</p>
+        </div>
       </template>
     </section>
   `,
@@ -1656,10 +1785,22 @@ const ProfilePage = {
   setup() {
     const graffiti = useGraffiti();
     const session = useGraffitiSession();
-    const { profileObjects, displayNameMap } = useProfiles();
+    const { profileObjects, displayNameMap } = inject("profilesData");
 
     const draftName = ref("");
     const isSaving = ref(false);
+    const copySuccess = ref(false);
+
+    async function copyHandle() {
+      if (!session.value) return;
+      try {
+        const handleEl = document.querySelector(".profile-handle-value");
+        const text = handleEl?.textContent?.trim() || session.value.actor;
+        await navigator.clipboard.writeText(text);
+        copySuccess.value = true;
+        setTimeout(() => { copySuccess.value = false; }, 1500);
+      } catch {}
+    }
 
     const myProfile = computed(() => {
       if (!session.value) return null;
@@ -1725,6 +1866,8 @@ const ProfilePage = {
       isSaving,
       currentName,
       saveName,
+      copySuccess,
+      copyHandle,
     };
   },
 };
@@ -1742,6 +1885,14 @@ const router = createRouter({
 
 const App = {
   template: "#template",
+  setup() {
+    const chatsData = useChats();
+    const joinedChatsData = useJoinedChats();
+    const profilesData = useProfiles();
+    provide("chatsData", chatsData);
+    provide("joinedChatsData", joinedChatsData);
+    provide("profilesData", profilesData);
+  },
 };
 
 createApp(App)

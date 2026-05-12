@@ -10,9 +10,10 @@ body {
 }
 
 .app-shell {
-  max-width: 900px;
+  max-width: 1000px;
   margin: 0 auto;
   padding: 24px;
+  width: 100%;
 }
 
 .topbar {
@@ -230,6 +231,7 @@ button:disabled {
   border-radius: 12px;
   margin-bottom: 12px;
   transition: border-color 0.2s, box-shadow 0.2s;
+  flex-wrap: wrap;
 }
 
 .chat-card:hover {
@@ -270,6 +272,8 @@ button:disabled {
   color: #16a34a;
 }
 
+
+
 .leave-btn {
   background: #f0eaee;
   color: #b91c1c;
@@ -278,6 +282,45 @@ button:disabled {
 
 .leave-btn:hover:not(:disabled) {
   background: #fde8e8;
+}
+
+.gear-btn {
+  background: transparent;
+  color: #5a3e8a;
+  font-size: 1.4rem;
+  padding: 4px 8px;
+  line-height: 1;
+  border-radius: 8px;
+}
+
+.gear-btn:hover {
+  background: #e8dff5;
+}
+
+.chat-settings-panel {
+  width: 100%;
+  margin-top: 12px;
+  padding: 14px;
+  background: #faf8fc;
+  border: 1px solid #e4dced;
+  border-radius: 12px;
+  animation: menu-scale-in 0.15s ease-out;
+}
+
+.settings-field {
+  margin-bottom: 12px;
+}
+
+.settings-field:last-child {
+  margin-bottom: 0;
+}
+
+.settings-field label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #3d2c5e;
+  margin-bottom: 6px;
 }
 
 .chat-header {
@@ -508,6 +551,16 @@ button:disabled {
   word-break: break-word;
 }
 
+.message-content a {
+  color: #5a3e8a;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.message-content a:hover {
+  color: #4e3578;
+}
+
 .message-menu-wrapper {
   position: relative;
 }
@@ -533,6 +586,12 @@ button:disabled {
   padding: 6px;
   animation: menu-scale-in 0.15s ease-out;
   transform-origin: top right;
+}
+
+.message-menu.menu-above {
+  top: auto;
+  bottom: 28px;
+  transform-origin: bottom right;
 }
 
 @keyframes menu-scale-in {
@@ -746,16 +805,29 @@ button:disabled {
 }
 
 @media (max-width: 650px) {
+  .app-shell {
+    padding: 12px;
+  }
+
   .topbar {
     flex-direction: column;
     align-items: center;
     padding-top: 40px;
   }
 
+  h1 {
+    font-size: 1.4rem;
+  }
+
   .auth-btn {
     position: absolute;
     top: 0;
     right: 0;
+  }
+
+  .info-btn-wrapper {
+    position: static;
+    align-self: flex-start;
   }
 
   .page-toolbar,
@@ -770,12 +842,31 @@ button:disabled {
     align-items: stretch;
   }
 
+  .chat-header {
+    flex-wrap: wrap;
+  }
+
   .message-bubble {
     max-width: 100%;
   }
 
   .inline-group-form input {
     max-width: none;
+  }
+
+  .panel,
+  .chat-view {
+    padding: 16px;
+  }
+
+  .profile-handle-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .broadcast-header {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 
@@ -804,6 +895,35 @@ button:disabled {
   margin-top: 14px;
   color: #6b6080;
   font-size: 0.95rem;
+}
+
+.profile-handle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-handle-value {
+  font-size: 1rem;
+  color: #3d2c5e;
+  font-weight: 600;
+  background: #f0eaf8;
+  padding: 8px 14px;
+  border-radius: 10px;
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+
+.copy-handle-btn {
+  white-space: nowrap;
+  font-size: 0.9rem;
+  padding: 8px 14px;
+}
+
+.profile-handle-hint {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: #8878a0;
 }
 
 .edited-indicator {
@@ -903,6 +1023,20 @@ button:disabled {
 
 .bulk-group-picker select {
   min-width: 150px;
+}
+
+@media (min-width: 1200px) {
+  .app-shell {
+    max-width: 1100px;
+  }
+
+  .messages {
+    max-height: 600px;
+  }
+
+  .chat-list {
+    max-height: 600px;
+  }
 }
 
 @media (max-width: 650px) {
