@@ -1,4 +1,4 @@
-import { createApp, ref, computed, watch } from "vue";
+import { createApp, ref, computed, watch, nextTick, onMounted } from "vue";
 import {
   createRouter,
   createWebHashHistory,
@@ -261,18 +261,25 @@ const MessageBubble = {
     "session",
     "isDeleting",
     "deleteMessage",
+    "editMessage",
+    "isEditing",
     "availableGroups",
     "getMessageGroups",
     "updateMessageGroups",
     "isUpdatingGroups",
     "getGroupColor",
     "getDisplayName",
+    "selectMode",
+    "isSelected",
+    "toggleSelect",
   ],
 
   setup(props) {
     const isMenuOpen = ref(false);
     const isEditingGroups = ref(false);
     const draftGroups = ref([]);
+    const isEditingContent = ref(false);
+    const editDraft = ref("");
 
     function toggleMenu() {
       isMenuOpen.value = !isMenuOpen.value;
@@ -311,10 +318,29 @@ const MessageBubble = {
       await props.deleteMessage(props.message);
     }
 
+    function startEditingContent() {
+      editDraft.value = props.message.value.content;
+      isEditingContent.value = true;
+      isMenuOpen.value = false;
+    }
+
+    function cancelEditingContent() {
+      editDraft.value = "";
+      isEditingContent.value = false;
+    }
+
+    async function saveEditedContent() {
+      if (!editDraft.value.trim()) return;
+      await props.editMessage(props.message, editDraft.value.trim());
+      isEditingContent.value = false;
+    }
+
     return {
       isMenuOpen,
       isEditingGroups,
       draftGroups,
+      isEditingContent,
+      editDraft,
       toggleMenu,
       closeMenu,
       startEditingGroups,
@@ -322,16 +348,31 @@ const MessageBubble = {
       toggleDraftGroup,
       saveGroups,
       handleDelete,
+      startEditingContent,
+      cancelEditingContent,
+      saveEditedContent,
     };
   },
 
   template: `
     <li
       class="message-bubble"
-      :class="{ mine: message.actor === session?.actor }"
+      :class="{
+        mine: message.actor === session?.actor,
+        selected: selectMode && isSelected,
+      }"
+      @click="selectMode ? toggleSelect(message) : null"
     >
       <div class="message-topline">
         <div class="message-meta">
+          <input
+            v-if="selectMode"
+            type="checkbox"
+            class="select-checkbox"
+            :checked="isSelected"
+            @click.stop
+            @change="toggleSelect(message)"
+          />
           <strong>
             <template v-if="getDisplayName(message.actor)">
               {{ getDisplayName(message.actor) }}
@@ -347,12 +388,20 @@ const MessageBubble = {
           >
             {{ group }}
           </span>
+
+          <span v-if="message.value.edited" class="edited-indicator">(edited)</span>
         </div>
 
-        <div class="message-menu-wrapper">
+        <div v-if="!selectMode" class="message-menu-wrapper">
           <button class="menu-dot-btn" @click="toggleMenu">⋯</button>
 
           <div v-if="isMenuOpen" class="message-menu">
+            <button
+              v-if="message.actor === session?.actor"
+              @click="startEditingContent"
+            >
+              Edit message
+            </button>
             <button @click="startEditingGroups">Edit groups</button>
             <button
               v-if="message.actor === session?.actor"
@@ -366,7 +415,27 @@ const MessageBubble = {
         </div>
       </div>
 
-      <div class="message-content">
+      <div v-if="isEditingContent" class="edit-content-area" @click.stop>
+        <textarea
+          class="edit-textarea"
+          v-model="editDraft"
+          rows="3"
+        ></textarea>
+        <div class="message-actions">
+          <button
+            @click="saveEditedContent"
+            :disabled="isEditing.has(message.url) || !editDraft.trim()"
+            class="small-btn"
+          >
+            {{ isEditing.has(message.url) ? "Saving..." : "Save" }}
+          </button>
+          <button @click="cancelEditingContent" class="small-btn secondary-btn">
+            Cancel
+          </button>
+        </div>
+      </div>
+
+      <div v-else class="message-content">
         {{ message.value.content }}
       </div>
 
@@ -646,6 +715,13 @@ const ChatPage = {
             <span class="broadcast-author">
               by <graffiti-actor-to-handle :actor="activeBroadcast.actor"></graffiti-actor-to-handle>
             </span>
+            <span v-if="activeBroadcast.value.lastEditedBy" class="broadcast-last-edit">
+              · last edited by
+              <template v-if="getDisplayName(activeBroadcast.value.lastEditedBy)">
+                {{ getDisplayName(activeBroadcast.value.lastEditedBy) }}
+              </template>
+              <graffiti-actor-to-handle v-else :actor="activeBroadcast.value.lastEditedBy"></graffiti-actor-to-handle>
+            </span>
             <button
               v-if="session"
               class="broadcast-end-btn"
@@ -729,6 +805,44 @@ const ChatPage = {
             </button>
           </form>
 
+          <button
+            v-if="session"
+            class="select-mode-btn"
+            :class="{ active: selectMode }"
+            @click="toggleSelectMode"
+          >
+            {{ selectMode ? "Cancel Select" : "Select" }}
+          </button>
+        </div>
+
+        <div v-if="selectMode && selectedMessages.size > 0" class="bulk-toolbar">
+          <span class="bulk-count">{{ selectedMessages.size }} selected</span>
+
+          <div class="bulk-actions">
+            <div class="bulk-group-picker">
+              <select v-model="bulkGroupTarget">
+                <option value="" disabled>Assign to group...</option>
+                <option v-for="group of availableGroups" :key="group" :value="group">
+                  {{ group }}
+                </option>
+              </select>
+              <button
+                @click="bulkAssignGroup"
+                :disabled="!bulkGroupTarget || isBulkUpdating"
+                class="small-btn"
+              >
+                {{ isBulkUpdating ? "Assigning..." : "Assign" }}
+              </button>
+            </div>
+
+            <button
+              class="small-btn leave-btn"
+              @click="bulkDeleteMessages"
+              :disabled="isBulkDeleting"
+            >
+              {{ isBulkDeleting ? "Deleting..." : "Delete Selected" }}
+            </button>
+          </div>
         </div>
 
         <div v-if="groupToDelete" class="delete-group-confirm">
@@ -741,7 +855,7 @@ const ChatPage = {
           </div>
         </div>
 
-        <div class="messages">
+        <div class="messages" ref="messagesContainer">
           <p v-if="areMessagesLoading"><em>Loading messages...</em></p>
 
           <template v-else>
@@ -753,12 +867,17 @@ const ChatPage = {
                 :session="$graffitiSession.value"
                 :isDeleting="isDeleting"
                 :deleteMessage="deleteMessage"
+                :editMessage="editMessage"
+                :isEditing="isEditing"
                 :availableGroups="availableGroups"
                 :getMessageGroups="getMessageGroups"
                 :updateMessageGroups="updateMessageGroups"
                 :isUpdatingGroups="isUpdatingGroups"
                 :getGroupColor="getGroupColor"
                 :getDisplayName="getDisplayName"
+                :selectMode="selectMode"
+                :isSelected="selectedMessages.has(message.url)"
+                :toggleSelect="toggleMessageSelect"
               />
             </ul>
 
@@ -844,6 +963,7 @@ const ChatPage = {
                   items: { type: "string" },
                 },
                 published: { type: "number" },
+                edited: { type: "boolean" },
               },
             },
           },
@@ -1027,6 +1147,24 @@ const ChatPage = {
         return getMessageGroups(message).includes(selectedGroup.value);
       });
     });
+
+    const messagesContainer = ref(null);
+
+    function scrollToBottom() {
+      nextTick(() => {
+        const el = messagesContainer.value;
+        if (el) {
+          el.scrollTop = el.scrollHeight;
+        }
+      });
+    }
+
+    watch(
+      () => visibleMessages.value.length,
+      () => scrollToBottom(),
+    );
+
+    onMounted(() => scrollToBottom());
 
     const isAddingGroup = ref(false);
     const newGroupName = ref("");
@@ -1215,6 +1353,95 @@ const ChatPage = {
       }
     }
 
+    const isEditing = ref(new Set());
+
+    async function editMessage(message, newContent) {
+      if (!session.value || !currentChat.value) return;
+      isEditing.value.add(message.url);
+      try {
+        await graffiti.patch(
+          { value: { content: newContent, edited: true } },
+          message,
+          session.value,
+        );
+      } catch (e) {
+        console.warn("Patch failed for edit, falling back to post+delete", e);
+        const oldMsg = message;
+        await graffiti.post(
+          {
+            value: {
+              ...oldMsg.value,
+              content: newContent,
+              edited: true,
+            },
+            channels: [currentChat.value.value.channel],
+          },
+          session.value,
+        );
+        try { await graffiti.delete(oldMsg, session.value); } catch {}
+      } finally {
+        isEditing.value.delete(message.url);
+      }
+    }
+
+    const selectMode = ref(false);
+    const selectedMessages = ref(new Set());
+    const bulkGroupTarget = ref("");
+    const isBulkUpdating = ref(false);
+    const isBulkDeleting = ref(false);
+
+    function toggleSelectMode() {
+      selectMode.value = !selectMode.value;
+      if (!selectMode.value) {
+        selectedMessages.value = new Set();
+        bulkGroupTarget.value = "";
+      }
+    }
+
+    function toggleMessageSelect(message) {
+      const next = new Set(selectedMessages.value);
+      if (next.has(message.url)) {
+        next.delete(message.url);
+      } else {
+        next.add(message.url);
+      }
+      selectedMessages.value = next;
+    }
+
+    async function bulkAssignGroup() {
+      if (!bulkGroupTarget.value || !session.value || !currentChat.value) return;
+      isBulkUpdating.value = true;
+      try {
+        for (const msg of visibleMessages.value) {
+          if (!selectedMessages.value.has(msg.url)) continue;
+          const current = getMessageGroups(msg);
+          if (!current.includes(bulkGroupTarget.value)) {
+            await updateMessageGroups(msg, [...current, bulkGroupTarget.value]);
+          }
+        }
+        selectedMessages.value = new Set();
+        bulkGroupTarget.value = "";
+      } finally {
+        isBulkUpdating.value = false;
+      }
+    }
+
+    async function bulkDeleteMessages() {
+      if (!session.value) return;
+      isBulkDeleting.value = true;
+      try {
+        for (const msg of visibleMessages.value) {
+          if (!selectedMessages.value.has(msg.url)) continue;
+          if (msg.actor === session.value.actor) {
+            await graffiti.delete(msg, session.value);
+          }
+        }
+        selectedMessages.value = new Set();
+      } finally {
+        isBulkDeleting.value = false;
+      }
+    }
+
     // --- Broadcast feature ---
     const { objects: broadcastObjects } = useGraffitiDiscover(
       activeMessageChannels,
@@ -1226,6 +1453,7 @@ const ChatPage = {
               type: { const: "Broadcast" },
               content: { type: "string" },
               published: { type: "number" },
+              lastEditedBy: { type: "string" },
             },
           },
         },
@@ -1245,12 +1473,17 @@ const ChatPage = {
     const isEndingBroadcast = ref(false);
     const isUpdatingBroadcast = ref(false);
     const broadcastDraft = ref("");
+    const loadedBroadcastUrl = ref(null);
 
     watch(activeBroadcast, (bc) => {
       if (bc) {
-        broadcastDraft.value = bc.value.content;
+        if (bc.url !== loadedBroadcastUrl.value) {
+          broadcastDraft.value = bc.value.content;
+          loadedBroadcastUrl.value = bc.url;
+        }
       } else {
         broadcastDraft.value = "";
+        loadedBroadcastUrl.value = null;
       }
     }, { immediate: true });
 
@@ -1283,7 +1516,7 @@ const ChatPage = {
 
       try {
         await graffiti.patch(
-          { value: { content: broadcastDraft.value } },
+          { value: { content: broadcastDraft.value, lastEditedBy: session.value.actor } },
           activeBroadcast.value,
           session.value,
         );
@@ -1295,6 +1528,7 @@ const ChatPage = {
             value: {
               type: "Broadcast",
               content: broadcastDraft.value,
+              lastEditedBy: session.value.actor,
               published: Date.now(),
             },
             channels: [currentChat.value.value.channel],
@@ -1344,6 +1578,7 @@ const ChatPage = {
       executeDeleteGroup,
 
       visibleMessages,
+      messagesContainer,
       getMessageGroups,
       updateMessageGroups,
       isUpdatingGroups,
@@ -1354,6 +1589,19 @@ const ChatPage = {
       isDeleting,
       sendMessage,
       deleteMessage,
+
+      editMessage,
+      isEditing,
+
+      selectMode,
+      selectedMessages,
+      toggleSelectMode,
+      toggleMessageSelect,
+      bulkGroupTarget,
+      isBulkUpdating,
+      isBulkDeleting,
+      bulkAssignGroup,
+      bulkDeleteMessages,
 
       activeBroadcast,
       broadcastDraft,
@@ -1481,23 +1729,6 @@ const ProfilePage = {
   },
 };
 
-const AboutPage = {
-  template: `
-    <section class="panel">
-      <p class="page-intro">
-        This chat app is designed to help students working on group projects, although it can be used for other purposes.
-        It supports creating and joining chatrooms, organizing messages into custom groups/folders, and broadcasing important messages.
-      </p>
-
-      <p>
-        The main design idea is to make group project discussions easier to manage.
-        Instead of having every message in one long stream, users can group messages
-        into categories like tasks, questions, announcements, or any custom folder.
-      </p>
-    </section>
-  `,
-};
-
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
@@ -1506,7 +1737,6 @@ const router = createRouter({
     { path: "/newchat", component: MyChatsPage },
     { path: "/chat/:chatId", component: ChatPage },
     { path: "/profile", component: ProfilePage },
-    { path: "/about", component: AboutPage },
   ],
 });
 
