@@ -1,4 +1,4 @@
-import { createApp, ref, computed, watch, nextTick, provide, inject } from "vue";
+import { createApp, ref, computed, watch, nextTick, provide, inject, onMounted, onBeforeUnmount } from "vue";
 import {
   createRouter,
   createWebHashHistory,
@@ -295,6 +295,16 @@ const MessageBubble = {
     const editDraft = ref("");
     const menuBtnRef = ref(null);
     const menuAbove = ref(false);
+    const menuWrapperRef = ref(null);
+
+    function handleClickOutside(e) {
+      if (isMenuOpen.value && menuWrapperRef.value && !menuWrapperRef.value.contains(e.target)) {
+        isMenuOpen.value = false;
+      }
+    }
+
+    onMounted(() => document.addEventListener("click", handleClickOutside));
+    onBeforeUnmount(() => document.removeEventListener("click", handleClickOutside));
 
     function toggleMenu() {
       if (!isMenuOpen.value && menuBtnRef.value) {
@@ -367,6 +377,7 @@ const MessageBubble = {
       editDraft,
       menuBtnRef,
       menuAbove,
+      menuWrapperRef,
       toggleMenu,
       closeMenu,
       startEditingGroups,
@@ -419,7 +430,7 @@ const MessageBubble = {
           <span v-if="message.value.edited" class="edited-indicator">(edited)</span>
         </div>
 
-        <div v-if="!selectMode" class="message-menu-wrapper">
+        <div v-if="!selectMode" class="message-menu-wrapper" ref="menuWrapperRef">
           <button class="menu-dot-btn" ref="menuBtnRef" @click="toggleMenu">⋯</button>
 
           <div v-if="isMenuOpen" class="message-menu" :class="{ 'menu-above': menuAbove }">
@@ -620,10 +631,20 @@ const DiscoverPage = {
         Browse public project chats and join the ones you want to keep in My Chats.
       </p>
 
+      <div class="search-wrapper">
+        <span class="search-icon">&#128269;</span>
+        <input
+          type="text"
+          v-model="searchQuery"
+          placeholder="Search chats..."
+          class="search-input"
+        />
+      </div>
+
       <p v-if="areChatsLoading"><em>Loading chats...</em></p>
 
-      <ul v-else-if="sortedChats.length" class="chat-list">
-        <li v-for="chat of sortedChats" :key="chat.url" class="chat-card">
+      <ul v-else-if="filteredChats.length" class="chat-list">
+        <li v-for="chat of filteredChats" :key="chat.url" class="chat-card">
           <div>
             <h3>{{ chat.value.title }}</h3>
             <p class="meta">
@@ -656,6 +677,8 @@ const DiscoverPage = {
         </li>
       </ul>
 
+      <p v-else-if="searchQuery.trim()">No chats match your search.</p>
+
       <p v-else>No public chats yet. Create the first one from My Chats.</p>
     </section>
   `,
@@ -668,8 +691,17 @@ const DiscoverPage = {
     const { sortedChats, areChatsLoading } = inject("chatsData");
     const { joinedChatChannels, getJoinObjectForChat } = inject("joinedChatsData");
 
+    const searchQuery = ref("");
     const isJoining = ref(new Set());
     const isLeaving = ref(new Set());
+
+    const filteredChats = computed(() => {
+      const q = searchQuery.value.trim().toLowerCase();
+      if (!q) return sortedChats.value;
+      return sortedChats.value.filter((chat) => {
+        return chat.value.title.toLowerCase().includes(q);
+      });
+    });
 
     async function joinChat(chat) {
       if (!session.value) return;
@@ -697,9 +729,10 @@ const DiscoverPage = {
     }
 
     return {
-      sortedChats,
+      filteredChats,
       areChatsLoading,
       joinedChatChannels,
+      searchQuery,
       isJoining,
       isLeaving,
       joinChat,
@@ -759,26 +792,42 @@ const ChatPage = {
 
           <div class="settings-field">
             <button
+              v-if="!confirmingDelete"
               class="small-btn leave-btn"
-              @click="deleteChat"
-              :disabled="isDeletingChat"
+              @click="confirmingDelete = true"
             >
-              {{ isDeletingChat ? "Deleting..." : "Delete Chat" }}
+              Delete Chat
             </button>
+
+            <div v-else class="delete-group-confirm">
+              <p>Are you sure you want to delete this chat?</p>
+              <div class="delete-group-actions">
+                <button
+                  class="small-btn leave-btn"
+                  @click="deleteChat"
+                  :disabled="isDeletingChat"
+                >
+                  {{ isDeletingChat ? "Deleting..." : "Yes, Delete" }}
+                </button>
+                <button class="small-btn secondary-btn" @click="confirmingDelete = false">
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         <div v-if="activeBroadcast" class="broadcast-box broadcast-active">
           <div class="broadcast-header">
             <strong>&#128226; Live Broadcast</strong>
-            <span class="broadcast-author">
-              by <graffiti-actor-to-handle :actor="activeBroadcast.actor"></graffiti-actor-to-handle>
-            </span>
             <span v-if="activeBroadcast.value.lastEditedBy" class="broadcast-last-edit">
-              · last edited by
+              last edited by
               <template v-if="getDisplayName(activeBroadcast.value.lastEditedBy)">
                 {{ getDisplayName(activeBroadcast.value.lastEditedBy) }}
               </template>
               <graffiti-actor-to-handle v-else :actor="activeBroadcast.value.lastEditedBy"></graffiti-actor-to-handle>
+            </span>
+            <span v-else class="broadcast-author">
+              by <graffiti-actor-to-handle :actor="activeBroadcast.actor"></graffiti-actor-to-handle>
             </span>
             <button
               v-if="session"
@@ -894,6 +943,15 @@ const ChatPage = {
             </div>
 
             <button
+              v-if="selectedGroup !== 'All'"
+              class="small-btn secondary-btn"
+              @click="bulkRemoveFromGroup"
+              :disabled="isBulkRemoving"
+            >
+              {{ isBulkRemoving ? "Removing..." : "Remove from " + selectedGroup }}
+            </button>
+
+            <button
               class="small-btn leave-btn"
               @click="bulkDeleteMessages"
               :disabled="isBulkDeleting"
@@ -956,11 +1014,13 @@ const ChatPage = {
           </button>
 
           <form @submit.prevent="sendMessage" class="message-form">
-            <input
-              type="text"
+            <textarea
               v-model="myMessage"
               placeholder="Type your message"
-            />
+              rows="1"
+              class="message-textarea"
+              @keydown.enter.exact.prevent="sendMessage"
+            ></textarea>
 
             <button :disabled="!myMessage.trim() || isSending" :class="{ 'send-success': sendSuccess }">
               {{ isSending ? "Sending..." : "Send" }}
@@ -992,6 +1052,7 @@ const ChatPage = {
     const renameValue = ref("");
     const isRenaming = ref(false);
     const isDeletingChat = ref(false);
+    const confirmingDelete = ref(false);
 
     const chatId = computed(() => {
       return decodeURIComponent(route.params.chatId);
@@ -1494,6 +1555,26 @@ const ChatPage = {
       }
     }
 
+    const isBulkRemoving = ref(false);
+
+    async function bulkRemoveFromGroup() {
+      if (selectedGroup.value === "All" || !session.value) return;
+      isBulkRemoving.value = true;
+      try {
+        for (const msg of visibleMessages.value) {
+          if (!selectedMessages.value.has(msg.url)) continue;
+          const current = getMessageGroups(msg);
+          const updated = current.filter((g) => g !== selectedGroup.value);
+          if (updated.length !== current.length) {
+            await updateMessageGroups(msg, updated);
+          }
+        }
+        selectedMessages.value = new Set();
+      } finally {
+        isBulkRemoving.value = false;
+      }
+    }
+
     async function bulkDeleteMessages() {
       if (!session.value) return;
       isBulkDeleting.value = true;
@@ -1672,6 +1753,7 @@ const ChatPage = {
       renameValue,
       isRenaming,
       isDeletingChat,
+      confirmingDelete,
       renameChat,
       deleteChat,
 
@@ -1716,7 +1798,9 @@ const ChatPage = {
       bulkGroupTarget,
       isBulkUpdating,
       isBulkDeleting,
+      isBulkRemoving,
       bulkAssignGroup,
+      bulkRemoveFromGroup,
       bulkDeleteMessages,
 
       activeBroadcast,

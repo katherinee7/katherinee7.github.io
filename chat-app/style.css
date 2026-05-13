@@ -153,6 +153,27 @@ h1 {
   color: #6b6080;
 }
 
+.search-wrapper {
+  position: relative;
+  margin: 14px 0 18px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1rem;
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.search-input {
+  width: 100%;
+  padding-left: 40px !important;
+  margin-bottom: 0;
+}
+
 .inline-create-form,
 .inline-group-form,
 .row {
@@ -272,8 +293,6 @@ button:disabled {
   color: #16a34a;
 }
 
-
-
 .leave-btn {
   background: #f0eaee;
   color: #b91c1c;
@@ -300,6 +319,7 @@ button:disabled {
 .chat-settings-panel {
   width: 100%;
   margin-top: 12px;
+  margin-bottom: 16px;
   padding: 14px;
   background: #faf8fc;
   border: 1px solid #e4dced;
@@ -639,6 +659,23 @@ button:disabled {
   display: flex;
   gap: 12px;
   flex: 1;
+  min-width: 0;
+}
+
+.message-textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: 10px 14px;
+  border: 1px solid #d0c6e0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  max-height: 120px;
+  overflow-y: auto;
+  word-break: break-word;
+  field-sizing: content;
 }
 
 .message-form button.send-success {
